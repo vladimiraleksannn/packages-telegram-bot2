@@ -4,7 +4,6 @@ import re
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
-from flask import Flask, request
 
 # Настройка логирования
 logging.basicConfig(
@@ -19,9 +18,6 @@ BOT_TOKEN = os.getenv('BOT_TOKEN')
 if not BOT_TOKEN:
     logger.error("❌ BOT_TOKEN не установлен!")
     exit(1)
-
-# Создаем Flask приложение
-app = Flask(__name__)
 
 # Создаем приложение Telegram
 application = Application.builder().token(BOT_TOKEN).build()
@@ -394,16 +390,8 @@ application.add_handler(CallbackQueryHandler(handle_alternative_search, pattern=
 application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-@app.route('/')
-def home():
-    return "🤖 Telegram Package Bot is running!"
-
-@app.route('/health')
-def health():
-    return "✅ OK"
-
 # Запуск бота
-async def run_bot():
+async def main():
     await application.initialize()
     await application.start()
     await application.updater.start_polling()
@@ -412,18 +400,6 @@ async def run_bot():
     # Бесконечный цикл
     while True:
         await asyncio.sleep(3600)
-
-def run_flask():
-    app.run(host='0.0.0.0', port=8080, debug=False)
-
-async def main():
-    # Запускаем бота и Flask параллельно
-    import threading
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
-    
-    await run_bot()
 
 if __name__ == "__main__":
     asyncio.run(main())
