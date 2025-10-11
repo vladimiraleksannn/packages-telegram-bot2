@@ -428,8 +428,13 @@ def main() -> None:
     application.add_handler(conv_handler)
     
     logger.info("🤖 Бот запущен и работает на Render...")
-    application.run_polling()
+    
+    # Используем polling с явными параметрами
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+        close_loop=False
+    )
 
 if __name__ == "__main__":
     main()
-
