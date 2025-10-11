@@ -169,6 +169,28 @@ def get_package_details(length, height, width, description):
     
     return details, drawing_url
 
+# Глобальная переменная для приложения
+application = None
+
+async def create_application():
+    """Создает и настраивает приложение"""
+    global application
+    if application is None:
+        application = Application.builder().token(BOT_TOKEN).build()
+        
+        # Регистрируем обработчики
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CallbackQueryHandler(handle_package_click, pattern="^package_"))
+        application.add_handler(CallbackQueryHandler(handle_alternative_search, pattern="^alternative_"))
+        application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+        
+        # Инициализируем приложение
+        await application.initialize()
+    
+    return application
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     welcome_text = """
 👋 Привет! Я бот для поиска пакетов.
@@ -184,7 +206,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     await update.message.reply_html(welcome_text)
 
-async def handle_size(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает все текстовые сообщения"""
     try:
         text = update.message.text.strip()
         logger.info(f"Получено сообщение: {text}")
@@ -215,7 +238,7 @@ async def handle_size(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await show_search_results(update, context, length, height, width, requested_type)
         
     except Exception as e:
-        logger.error(f"Error in handle_size: {e}")
+        logger.error(f"Error in handle_text: {e}")
         await update.message.reply_html(
             "❌ Ошибка. Введите размеры в формате: <code>длина высота ширина</code>\n"
             "Например: <code>400 300 150</code>"
@@ -425,34 +448,23 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 Бот автоматически определит тип пакета и предложит альтернативные варианты!
     """)
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает все текстовые сообщения"""
-    # Если сообщение не команда, обрабатываем как размеры
-    await handle_size(update, context)
-
-# Глобальная переменная для приложения
-telegram_app = None
-
-async def setup_application():
-    """Настраивает и возвращает приложение"""
-    global telegram_app
-    if telegram_app is None:
-        telegram_app = Application.builder().token(BOT_TOKEN).build()
-        
-        # Регистрируем обработчики
-        telegram_app.add_handler(CommandHandler("start", start))
-        telegram_app.add_handler(CommandHandler("help", help_command))
-        telegram_app.add_handler(CallbackQueryHandler(handle_package_click, pattern="^package_"))
-        telegram_app.add_handler(CallbackQueryHandler(handle_alternative_search, pattern="^alternative_"))
-        telegram_app.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
-        
-        # Обработчик для всех текстовых сообщений (кроме команд)
-        telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-        
-        # Инициализируем приложение
-        await telegram_app.initialize()
+# Создаем приложение при запуске
+async def init_app():
+    """Инициализирует приложение один раз при запуске"""
+    global application
+    application = await create_application()
     
-    return telegram_app
+    # Настраиваем webhook
+    render_external_url = os.getenv('RENDER_EXTERNAL_URL')
+    if render_external_url:
+        webhook_url = f"{render_external_url}/webhook"
+        await application.bot.delete_webhook()
+        await application.bot.set_webhook(
+            url=webhook_url,
+            allowed_updates=["message", "callback_query"],
+            drop_pending_updates=True
+        )
+        logger.info(f"✅ Webhook установлен: {webhook_url}")
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -460,17 +472,15 @@ def webhook():
     try:
         json_data = request.get_json()
         
-        # Создаем новое событийное loop для асинхронной обработки
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
+        # Используем существующее приложение и запускаем обработку в существующем event loop
         async def process_update():
-            app = await setup_application()
-            update = Update.de_json(data=json_data, bot=app.bot)
-            await app.process_update(update)
+            update = Update.de_json(data=json_data, bot=application.bot)
+            await application.process_update(update)
         
-        loop.run_until_complete(process_update())
-        loop.close()
+        # Запускаем в существующем event loop приложения
+        if application:
+            future = asyncio.run_coroutine_threadsafe(process_update(), application._loop)
+            future.result(timeout=10)  # Таймаут 10 секунд
         
         return jsonify({"status": "ok"})
     except Exception as e:
@@ -487,44 +497,18 @@ def home():
     """Корневой endpoint"""
     return jsonify({"status": "running", "service": "telegram-bot"})
 
-async def setup_webhook():
-    """Настраивает webhook при запуске"""
-    try:
-        app_instance = await setup_application()
-        
-        # Получаем URL для webhook из переменных окружения Render
-        render_external_url = os.getenv('RENDER_EXTERNAL_URL')
-        
-        if render_external_url:
-            webhook_url = f"{render_external_url}/webhook"
-            
-            # Удаляем старый webhook и устанавливаем новый
-            await app_instance.bot.delete_webhook()
-            await app_instance.bot.set_webhook(
-                url=webhook_url,
-                allowed_updates=["message", "callback_query"],
-                drop_pending_updates=True
-            )
-            logger.info(f"✅ Webhook установлен: {webhook_url}")
-        else:
-            logger.warning("⚠️ RENDER_EXTERNAL_URL не установлен, webhook не настроен")
-            
-    except Exception as e:
-        logger.error(f"❌ Ошибка настройки webhook: {e}")
-
 def run_bot():
     """Запускает бота"""
     try:
-        # Запускаем настройку webhook
+        # Создаем и запускаем event loop для инициализации
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(setup_webhook())
-        loop.close()
+        loop.run_until_complete(init_app())
         
         # Запускаем Flask приложение
         port = int(os.environ.get('PORT', 8080))
         logger.info(f"🚀 Запуск бота на порту {port}")
-        app.run(host='0.0.0.0', port=port, debug=False)
+        app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
         
     except Exception as e:
         logger.error(f"❌ Критическая ошибка при запуске: {e}")
