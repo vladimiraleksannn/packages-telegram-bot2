@@ -4,7 +4,7 @@ import re
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
-from flask import Flask
+from flask import Flask, request
 
 # Настройка логирования
 logging.basicConfig(
@@ -13,7 +13,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Используем переменную окружения для токена
+# Токен бота из переменных окружения
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 
 if not BOT_TOKEN:
@@ -394,38 +394,36 @@ application.add_handler(CallbackQueryHandler(handle_alternative_search, pattern=
 application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-@app.route('/health', methods=['GET'])
-def health():
-    return {"status": "healthy", "bot": "running"}
-
 @app.route('/')
 def home():
-    return "Telegram Package Bot is running!"
+    return "🤖 Telegram Package Bot is running!"
 
+@app.route('/health')
+def health():
+    return "✅ OK"
+
+# Запуск бота
 async def run_bot():
-    """Запуск бота в режиме polling"""
     await application.initialize()
     await application.start()
     await application.updater.start_polling()
+    logger.info("✅ Бот запущен в режиме polling!")
     
-    logger.info("🤖 Бот запущен в режиме polling!")
-    
-    # Бесконечный цикл чтобы бот не завершался
+    # Бесконечный цикл
     while True:
         await asyncio.sleep(3600)
 
 def run_flask():
-    """Запуск Flask приложения"""
-    port = int(os.getenv('PORT', 8080))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=8080, debug=False)
 
 async def main():
-    """Основная функция"""
     # Запускаем бота и Flask параллельно
-    await asyncio.gather(
-        run_bot(),
-        asyncio.to_thread(run_flask)
-    )
+    import threading
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+    
+    await run_bot()
 
 if __name__ == "__main__":
     asyncio.run(main())
