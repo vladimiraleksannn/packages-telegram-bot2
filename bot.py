@@ -1,6 +1,9 @@
 import os
 import logging
 import re
+import signal
+import sys
+import time
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 
@@ -406,35 +409,52 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 Бот автоматически определит тип пакета и предложит альтернативные варианты!
     """)
 
-def main() -> None:
+def signal_handler(signum, frame):
+    """Обработчик сигналов для graceful shutdown"""
+    logger.info("🛑 Получен сигнал завершения...")
+    sys.exit(0)
+
+def main():
+    """Основная функция с обработкой ошибок и автоматическим перезапуском"""
+    # Регистрируем обработчики сигналов
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     # Запускаем веб-сервер для поддержания работы на Render
     keep_alive()
     
-    # Используем токен из переменных окружения
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Создаем ConversationHandler для обработки диалога
-    conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_size)],
-        states={},
-        fallbacks=[CommandHandler("cancel", cancel)]
-    )
-    
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CallbackQueryHandler(handle_package_click, pattern="^package_"))
-    application.add_handler(CallbackQueryHandler(handle_alternative_search, pattern="^alternative_"))
-    application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
-    application.add_handler(conv_handler)
-    
-    logger.info("🤖 Бот запущен и работает на Render...")
-    
-    # Используем polling с явными параметрами
-    application.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,
-        close_loop=False
-    )
+    try:
+        # Используем токен из переменных окружения
+        application = Application.builder().token(BOT_TOKEN).build()
+        
+        # Создаем ConversationHandler для обработки диалога
+        conv_handler = ConversationHandler(
+            entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_size)],
+            states={},
+            fallbacks=[CommandHandler("cancel", cancel)]
+        )
+        
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CallbackQueryHandler(handle_package_click, pattern="^package_"))
+        application.add_handler(CallbackQueryHandler(handle_alternative_search, pattern="^alternative_"))
+        application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
+        application.add_handler(conv_handler)
+        
+        logger.info("🤖 Бот запущен и работает на Render...")
+        
+        # Используем polling с обработкой исключений
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+            close_loop=False
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка: {e}")
+        logger.info("🔄 Перезапуск бота через 10 секунд...")
+        time.sleep(10)
+        main()  # Рекурсивный перезапуск
 
 if __name__ == "__main__":
     main()
