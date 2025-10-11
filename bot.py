@@ -5,6 +5,7 @@ import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from flask import Flask, request, jsonify
+import threading
 
 # Настройка логирования
 logging.basicConfig(
@@ -31,7 +32,68 @@ PACKAGES = [
     # Вертикальные пакеты с первого скрина
     (250, 350, 90, "Пакет верт. д250 ш90 в350 / с ручками / Штамп 1158", "https://disk.360.yandex.ru/d/Peyk8BPpIlnZhA"),
     (100, 120, 90, "Пакет верт. д100 ш90 в120 / Штамп 512", "https://disk.360.yandex.ru/d/3-yN-eN1W8_oFA"),
-    # ... (остальные пакеты остаются без изменений)
+    (110, 360, 100, "Пакет верт. д110 ш100 в360 / дно без нахлеста / Штамп 095", "https://disk.360.yandex.ru/d/VFv4p5Z1Kg76WQ"),
+    (110, 320, 90, "Пакет верт. д110 ш90 в320 / Штамп 326", "https://disk.360.yandex.ru/d/RkCLCQjU1lBlhg"),
+    (120, 370, 115, "Пакет верт. д120 ш115 в370 / Штамп 1092", "https://disk.360.yandex.ru/d/Q2AR6FSw6B5znA"),
+    (120, 400, 115, "Пакет верт. д120 ш115 в400 / Штамп 713", "https://disk.360.yandex.ru/d/GHji0S2f96lCUg"),
+    (120, 340, 120, "Пакет верт. д120 ш120 в340 / дно без нахлеста / Штамп 091", "https://disk.360.yandex.ru/d/JwWNUCYVW7dppA"),
+    (120, 370, 120, "Пакет верт. д120 ш120 в370 / Шато Тамань / Штамп 718", "https://disk.360.yandex.ru/d/yaGfocdeiWf8-Q"),
+    (120, 220, 90, "Пакет верт. д120 ш90 в220 / 2 на листе / Штамп 1079", "https://disk.360.yandex.ru/d/fsfvOIEHDjEGJA"),
+    (130, 220, 30, "Пакет верт. д130 ш30 в220 / дно без нахлеста / Штамп 094", "https://disk.360.yandex.ru/d/uk1Jb_USjMgpgA"),
+    (140, 160, 60, "Пакет верт. д140 ш60 в160 / с прорезями под ленты / Штамп 619", "https://disk.360.yandex.ru/d/S5RwXnfNWPG0ng"),
+    (140, 180, 70, "Пакет верт. д140 ш70 в180 / Штамп 559", "https://disk.360.yandex.ru/d/W-FTwGSHlv2pgw"),
+    (170, 260, 40, "Пакет верт. д170 ш40 в260 / Штамп 325", "https://disk.360.yandex.ru/d/mWRLkrx0uTtnOA"),
+    (170, 280, 90, "Пакет верт. д170 ш90 в280 / Штамп 042", "https://disk.360.yandex.ru/d/GYTxXr6rdCaOoA"),
+    (180, 230, 90, "Пакет верт. д180 ш90 в230 / Штамп 164", "https://disk.360.yandex.ru/d/QvlEFYLggsEAAw"),
+    (190, 250, 70, "Пакет верт. д190 ш70 в250 / Штамп 927", "https://disk.360.yandex.ru/d/Ii-ZsU9VPFf1mA"),
+    (200, 250, 100, "Пакет верт. д200 ш100 в250 / Штамп 892", "https://disk.360.yandex.ru/d/3kzW0mZl-wk9TA"),
+    (200, 250, 100, "Пакет верт. д200 ш100 в250 / с вырубкой ручкой / Штамп 1032", "https://disk.360.yandex.ru/d/oEDrzOgWHlOkXw"),
+    (200, 250, 80, "Пакет верт. д200 ш80 в250 / отверстия под ленты/ Штамп 758", "https://disk.360.yandex.ru/d/dLI00bXytUo9cA"),
+    (220, 300, 120, "Пакет верт. д220 ш120 в300 / с ручками / Штамп 1046", "https://disk.360.yandex.ru/d/y2yr572Pvv2YPw"),
+    (220, 320, 80, "Пакет верт. д220 ш80 в320 / Штамп 093", "https://disk.360.yandex.ru/d/F17zyggakb0LJA"),
+    (250, 320, 50, "Пакет верт. д250 ш50 в320 / Половинка пакета Владимир / Штамп 950", "https://disk.360.yandex.ru/d/gm-Si78cmkM9qA"),
+    (250, 360, 90, "Пакет верт. д250 ш90 в360 / КАСП средний / Штамп 394", "https://disk.360.yandex.ru/d/viC1RXxAFpOUFw"),
+    (250, 380, 90, "Пакет верт. д250 ш90 в380 / Штамп 768", "https://disk.360.yandex.ru/d/1B_qrpgk-23ZqA"),
+    (270, 350, 120, "Пакет верт. д270 ш120 в350 / половинка пакета / Штамп 692", "https://disk.360.yandex.ru/d/d0yG6vp6gASvaA"),
+    (270, 350, 140, "Пакет верт. д270 ш140 в350 / Половинка пакета Владимир / Штамп 951", "https://disk.360.yandex.ru/d/Tb_ApuI4ul8wgA"),
+    (290, 370, 60, "Пакет верт. д290 ш60 в370 / Штамп 908", "https://disk.360.yandex.ru/d/FNU-ltQ5vZKssQ"),
+    (300, 400, 120, "Пакет верт. д300 ш120 в400 / половинка пакета / Штамп 655", "https://disk.360.yandex.ru/d/DvRSRcuu_vTVzQ"),
+    (300, 460, 120, "Пакет верт. д300 ш120 в460 / половинка пакета / Штамп 097", "https://disk.360.yandex.ru/d/xHRnjFuNSM-rUQ"),
+    (300, 350, 135, "Пакет верт. д300 ш135 в350 / половинка пакета / Штамп 570", "https://disk.360.yandex.ru/d/3hAmNimaQ0ofDA"),
+    (300, 400, 150, "Пакет верт. д300 ш150 в400 / половинка пакета / Штамп 769", "https://disk.360.yandex.ru/d/EeiPrlgFutVcGw"),
+    (340, 480, 150, "Пакет верт. д340 ш150 в480 / половинка пакета / Штамп 772", "https://disk.360.yandex.ru/d/72Rbqxbljdez2A"),
+    
+    # Вертикальные пакеты со второго скрина
+    (350, 450, 100, "Пакет верт. д350 ш100 в450 / половинка пакета / Штамп 478", "https://disk.360.yandex.ru/d/kyEe7JWJl071UQ"),
+    
+    # Горизонтальные пакеты со второго скрина
+    (160, 140, 80, "Пакет гор. д160 ш80 в140 / 3 на листе / Штамп 980", "https://disk.360.yandex.ru/d/_0Qx-vmY5-ImbQ"),
+    (220, 180, 125, "Пакет гор. д220 ш125 в180 / отверстия под ленты / Штамп 919", "https://disk.360.yandex.ru/d/CGStQuXiiw4U-g"),
+    (230, 180, 90, "Пакет гор. д230 ш90 в180 / Штамп 096", "https://disk.360.yandex.ru/d/BzRmOcxFebIJzg"),
+    (248, 230, 108, "Пакет гор. д248 ш108 в230 / Штамп 565", "https://disk.360.yandex.ru/d/tJmxsPZaOTunyw"),
+    (280, 220, 100, "Пакет гор. д280 ш100 в220 / Половинка пакета Владимир / Штамп 949", "https://disk.360.yandex.ru/d/w92NUZFaOIpiyw"),
+    (280, 240, 70, "Пакет гор. д280 ш70 в240 / Штамп 133", "https://disk.360.yandex.ru/d/74TMziAk6zsEgw"),
+    (300, 290, 140, "Пакет гор. д300 ш140 в290 / 1 половина / Штамп 933", "https://disk.360.yandex.ru/d/08q6eprjImYlPg"),
+    (335, 165, 75, "Пакет гор. д335 ш75 в165 / 2 половинки на штампе / Штамп 1136", "https://disk.360.yandex.ru/d/NmwI1In9LLPrNw"),
+    (300, 240, 130, "Пакет гор. д300 ш130 в240 / половинка пакета / Штамп 316", None),
+    (390, 300, 150, "Пакет гор. д390 ш150 в300 / половинка пакета / Штамп 770", "https://disk.360.yandex.ru/d/cTe1E-2zTdVO9g"),
+    (400, 250, 120, "Пакет гор. д400 ш120 в250 мм / половинка пакета/Штамп 092", "https://disk.360.yandex.ru/d/c04m8A23_hcR_Q"),
+    (400, 300, 120, "Пакет гор. д400 ш120 в300 / половинка пакета / Штамп 430", "https://disk.360.yandex.ru/d/ddmj-2Q7tbjeFg"),
+    (400, 300, 150, "Пакет гор. д400 ш150 в300 / половинка пакета / Штамп 531", "https://disk.360.yandex.ru/d/EmxhEKA4-o57Rw"),
+    (400, 300, 200, "Пакет гор. д400 ш200 в300 / половинка пакета / Штамп 090", "https://disk.360.yandex.ru/d/-Zf8EzAR8ODk0A"),
+    (410, 280, 280, "Пакет гор. д410 ш280 в280 / половинка пакета / Штамп 915", "https://disk.360.yandex.ru/d/yIBD0zOo_tXX9w"),
+    (420, 400, 200, "Пакет гор. д420 ш200 в400 / половинка пакета / нужна 'заплатка' на дно / Штамп 508", "https://disk.360.yandex.ru/d/SIdLisRNGL4Kcw"),
+    (450, 300, 140, "Пакет гор. д450 ш140 в300 / половинка пакета / Штамп 328", None),
+    (460, 390, 150, "Пакет гор. д460 ш150 в390 / половинка пакета / Штамп 914", "https://disk.360.yandex.ru/d/8f-sJ4k69YsoUQ"),
+    (480, 340, 140, "Пакет гор. д480 ш140 в340 / половинка пакета / Штамп 771", "https://disk.360.yandex.ru/d/8eOb9ha0yo-9rQ"),
+    (490, 390, 73, "Пакет гор. д490 ш73 в390 / половинка пакета / пуансоны под ручки на штампе / Штамп 532", "https://disk.360.yandex.ru/d/rIhAn9GP19JScA"),
+    (500, 550, 100, "Пакет гор. д500 ш100 в550 / половинка пакета / Штамп 376", "https://disk.360.yandex.ru/d/2aYmmPwpmkqn5A"),
+    (500, 400, 200, "Пакет гор. д500 ш200 в400 / половинка пакета / нужна 'заплатка' на дно / Штамп 533", "https://disk.360.yandex.ru/d/C9We9YAafSvSHw"),
+    (530, 340, 170, "Пакет гор. д530 ш170 в340 / половинка пакета / Штамп 379", "https://disk.360.yandex.ru/d/9VchoXrY3U0JPA"),
+    
+    # Квадратные/универсальные пакеты со второго скрина
+    (150, 150, 80, "Пакет д150 ш80 в150 / Штамп 230", "https://disk.360.yandex.ru/d/C81M3tOCOslx4g"),
+    (220, 220, 120, "Пакет д220 ш120 в220 / Штамп 427", "https://disk.360.yandex.ru/d/69V_z4FbsvDiag"),
     (220, 220, 120, "Пакет д220 ш120 в220 / отверстия под ленты / Штамп 846", "https://disk.360.yandex.ru/d/P2TtXuwkP1MpAQ"),
 ]
 
@@ -388,17 +450,22 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """)
 
 @app.route('/webhook', methods=['POST'])
-async def webhook():
-    """Async endpoint для webhook запросов от Telegram"""
+def webhook():
+    """Синхронный обработчик webhook"""
+    if application is None:
+        return jsonify({"status": "error", "message": "Application not initialized"}), 500
+        
     try:
         # Получаем JSON данные из запроса
         json_data = request.get_json()
         
-        # Создаем Update объект из полученных данных
-        update = Update.de_json(json_data, application.bot)
+        # Обрабатываем обновление в отдельном потоке
+        async def process_update():
+            update = Update.de_json(json_data, application.bot)
+            await application.process_update(update)
         
-        # Обрабатываем обновление через приложение
-        await application.process_update(update)
+        # Запускаем асинхронную обработку
+        asyncio.run_coroutine_threadsafe(process_update(), application._get_running_loop())
         
         return jsonify({"status": "ok"})
         
@@ -414,24 +481,18 @@ def health():
 def home():
     return "Telegram Bot is running!"
 
-async def setup_webhook():
-    """Настраивает webhook при запуске"""
+def run_flask():
+    """Запускает Flask приложение"""
+    port = int(os.environ.get('PORT', 10000))
+    logger.info(f"🚀 Запуск Flask на порту {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+async def setup_bot():
+    """Настраивает бота"""
     global application
     
-    # Создаем приложение
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Регистрируем обработчики
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CallbackQueryHandler(handle_package_click, pattern="^package_"))
-    application.add_handler(CallbackQueryHandler(handle_alternative_search, pattern="^alternative_"))
-    application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    
-    # Инициализируем и запускаем приложение
-    await application.initialize()
-    await application.start()
+    # Создаем и настраиваем приложение
+    await create_application()
     
     # Настраиваем webhook
     render_external_url = os.getenv('RENDER_EXTERNAL_URL')
@@ -447,15 +508,18 @@ async def setup_webhook():
     else:
         logger.warning("❌ RENDER_EXTERNAL_URL не установлен, webhook не настроен")
 
-def run_bot():
-    """Запускает бота синхронно"""
-    # Запускаем настройку webhook
-    asyncio.run(setup_webhook())
+def main():
+    """Основная функция запуска"""
+    # Запускаем настройку бота в отдельном потоке
+    def run_bot():
+        asyncio.run(setup_bot())
     
-    # Запускаем Flask приложение
-    port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🚀 Запуск бота на порту {port}")
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # Запускаем Flask
+    run_flask()
 
 if __name__ == "__main__":
-    run_bot()
+    main()
