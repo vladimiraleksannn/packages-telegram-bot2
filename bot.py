@@ -3,7 +3,6 @@ import logging
 import re
 import time
 import asyncio
-import threading
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from flask import Flask, request, jsonify
@@ -172,7 +171,25 @@ def get_package_details(length, height, width, description):
 
 # Глобальная переменная для приложения
 application = None
-update_queue = asyncio.Queue()
+
+def setup_application():
+    """Инициализирует приложение один раз при запуске"""
+    global application
+    if application is None:
+        application = Application.builder().token(BOT_TOKEN).build()
+        
+        # Регистрируем обработчики
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CallbackQueryHandler(handle_package_click, pattern="^package_"))
+        application.add_handler(CallbackQueryHandler(handle_alternative_search, pattern="^alternative_"))
+        application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+        
+        # Инициализируем приложение
+        application.initialize()
+    
+    return application
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     welcome_text = """
@@ -431,100 +448,84 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 Бот автоматически определит тип пакета и предложит альтернативные варианты!
     """)
 
-async def create_application():
-    """Создает и настраивает приложение"""
-    global application
-    if application is None:
-        application = Application.builder().token(BOT_TOKEN).build()
-        
-        # Регистрируем обработчики
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CallbackQueryHandler(handle_package_click, pattern="^package_"))
-        application.add_handler(CallbackQueryHandler(handle_alternative_search, pattern="^alternative_"))
-        application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-        
-        # Инициализируем приложение
-        await application.initialize()
-        await application.start()
-    
-    return application
-
-async def process_update_from_webhook(update_data):
-    """Обрабатывает обновление из webhook"""
+def webhook_handler(json_data):
+    """Синхронный обработчик webhook запросов от Telegram"""
     try:
-        if application:
-            update = Update.de_json(update_data, application.bot)
+        # Создаем новое событийное loop для асинхронной обработки
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        async def process_update():
+            update = Update.de_json(data=json_data, bot=application.bot)
             await application.process_update(update)
+        
+        loop.run_until_complete(process_update())
+        loop.close()
+        
+        return {"status": "ok"}
     except Exception as e:
-        logger.error(f"Error processing update: {e}")
+        logger.error(f"Webhook handler error: {e}")
+        return {"status": "error", "message": str(e)}, 500
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Обработчик webhook запросов от Telegram"""
+    """Endpoint для webhook запросов от Telegram"""
     try:
+        # Получаем JSON данные из запроса
         json_data = request.get_json()
         
-        # Добавляем обновление в очередь для обработки
-        if application:
-            # Запускаем обработку в event loop приложения
-            asyncio.create_task(process_update_from_webhook(json_data))
+        # Обрабатываем обновление
+        result = webhook_handler(json_data)
+        return jsonify(result)
         
-        return jsonify({"status": "ok"})
     except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        logger.error(f"Error in webhook: {e}")
+        return jsonify({"status": "error"}), 500
 
 @app.route('/health', methods=['GET'])
-def health_check():
-    """Health check endpoint для Render"""
-    return jsonify({"status": "healthy", "service": "telegram-bot"})
+def health():
+    return "OK"
 
 @app.route('/')
 def home():
-    """Корневой endpoint"""
-    return jsonify({"status": "running", "service": "telegram-bot"})
-
-async def setup_webhook():
-    """Настраивает webhook при запуске"""
-    try:
-        render_external_url = os.getenv('RENDER_EXTERNAL_URL')
-        if render_external_url:
-            webhook_url = f"{render_external_url}/webhook"
-            await application.bot.delete_webhook()
-            await application.bot.set_webhook(
-                url=webhook_url,
-                allowed_updates=["message", "callback_query"],
-                drop_pending_updates=True
-            )
-            logger.info(f"✅ Webhook установлен: {webhook_url}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка настройки webhook: {e}")
+    return "Telegram Bot is running!"
 
 def run_bot():
-    """Запускает бота в отдельном потоке"""
-    async def main():
-        await create_application()
-        await setup_webhook()
+    """Запускает бота"""
+    try:
+        # Настраиваем приложение
+        setup_application()
         
-        # Бесконечный цикл для поддержания работы
-        while True:
-            await asyncio.sleep(3600)
-    
-    # Запускаем бота в отдельном потоке
-    def run_async():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(main())
-    
-    bot_thread = threading.Thread(target=run_async, daemon=True)
-    bot_thread.start()
-    
-    # Запускаем Flask приложение
-    port = int(os.environ.get('PORT', 8080))
-    logger.info(f"🚀 Запуск бота на порту {port}")
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+        # Настраиваем webhook
+        render_external_url = os.getenv('RENDER_EXTERNAL_URL')
+        if render_external_url:
+            # Используем синхронный метод для настройки webhook
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            async def setup_webhook():
+                webhook_url = f"{render_external_url}/webhook"
+                await application.bot.delete_webhook()
+                await application.bot.set_webhook(
+                    url=webhook_url,
+                    allowed_updates=["message", "callback_query"],
+                    drop_pending_updates=True
+                )
+                logger.info(f"✅ Webhook установлен: {webhook_url}")
+            
+            loop.run_until_complete(setup_webhook())
+            loop.close()
+        
+        # Запускаем Flask приложение
+        port = int(os.environ.get('PORT', 8080))
+        logger.info(f"🚀 Запуск бота на порту {port}")
+        app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+        
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка при запуске: {e}")
+        logger.info("🔄 Перезапуск через 10 секунд...")
+        time.sleep(10)
+        run_bot()
 
 if __name__ == "__main__":
     run_bot()
