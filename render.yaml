@@ -1,4 +1,3 @@
-yaml
 services:
   - type: web
     name: telegram-package-bot
@@ -10,3 +9,4 @@ services:
     envVars:
       - key: BOT_TOKEN
         sync: false
+
