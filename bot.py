@@ -4,12 +4,10 @@ import re
 import signal
 import sys
 import time
+import asyncio
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 from telegram.error import Conflict
-
-# Добавляем веб-сервер для поддержания работы
-from keep_alive import keep_alive, app
 
 # Настройка логирования
 logging.basicConfig(
@@ -414,11 +412,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 Бот автоматически определит тип пакета и предложит альтернативные варианты!
     """)
 
-def signal_handler(signum, frame):
-    """Обработчик сигналов для graceful shutdown"""
-    logger.info("🛑 Получен сигнал завершения...")
-    sys.exit(0)
-
 # Глобальная переменная для приложения
 application = None
 
@@ -448,9 +441,12 @@ async def webhook_handler(request):
     """Обработчик webhook запросов от Telegram"""
     try:
         application = await setup_application()
-        await application.update_queue.put(
-            Update.de_json(data=await request.json(), bot=application.bot)
-        )
+        await application.initialize()
+        
+        # Обрабатываем обновление
+        update = Update.de_json(data=await request.json(), bot=application.bot)
+        await application.process_update(update)
+        
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"Webhook error: {e}")
@@ -458,14 +454,7 @@ async def webhook_handler(request):
 
 def main():
     """Основная функция с webhook для Render"""
-    # Регистрируем обработчики сигналов
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
     try:
-        # Запускаем веб-сервер
-        keep_alive()
-        
         # Получаем URL для webhook из переменных окружения Render
         render_external_url = os.getenv('RENDER_EXTERNAL_URL')
         
@@ -473,8 +462,6 @@ def main():
             logger.info("🚀 Запуск в режиме Webhook на Render")
             
             # Настраиваем webhook при запуске
-            import asyncio
-            
             async def setup_webhook():
                 app = await setup_application()
                 webhook_url = f"{render_external_url}/webhook"
@@ -483,7 +470,7 @@ def main():
                 await app.bot.delete_webhook()
                 await app.bot.set_webhook(
                     url=webhook_url,
-                    allowed_updates=Update.ALL_TYPES,
+                    allowed_updates=["message", "callback_query"],
                     drop_pending_updates=True
                 )
                 logger.info(f"✅ Webhook установлен: {webhook_url}")
@@ -491,8 +478,21 @@ def main():
             # Запускаем настройку webhook
             asyncio.run(setup_webhook())
             
-            # Бот теперь работает через webhook, Flask сервер обрабатывает запросы
-            logger.info("🤖 Бот запущен в режиме webhook и готов к работе!")
+            # Импортируем и запускаем Flask сервер
+            from keep_alive import app
+            import threading
+            
+            def run_flask():
+                app.run(host='0.0.0.0', port=8080, debug=False)
+            
+            # Запускаем Flask в отдельном потоке
+            flask_thread = threading.Thread(target=run_flask, daemon=True)
+            flask_thread.start()
+            logger.info("🌐 Flask сервер запущен на порту 8080")
+            
+            # Бесконечный цикл для поддержания работы
+            while True:
+                time.sleep(3600)  # Спим 1 час
             
         else:
             logger.info("🔍 Запуск в режиме Polling (для локальной разработки)")
@@ -503,14 +503,14 @@ def main():
                 await app.initialize()
                 await app.start()
                 await app.updater.start_polling(
-                    allowed_updates=Update.ALL_TYPES,
+                    allowed_updates=["message", "callback_query"],
                     drop_pending_updates=True
                 )
                 logger.info("🤖 Бот запущен в режиме polling")
                 
                 # Бесконечный цикл
                 while True:
-                    await asyncio.sleep(3600)  # Спим 1 час
+                    await asyncio.sleep(3600)
                     
             asyncio.run(run_polling())
             
