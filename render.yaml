@@ -1,11 +1,12 @@
 yaml
-services
-  - type web
-    name telegram-package-bot
-    env python
-    plan free
-    buildCommand pip install -r requirements.txt
-    startCommand python bot.py
-    envVars
-      - key BOT_TOKEN
-        sync false
+services:
+  - type: web
+    name: telegram-package-bot
+    env: python
+    plan: free
+    pythonVersion: "3.11"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
