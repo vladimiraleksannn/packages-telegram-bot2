@@ -172,8 +172,8 @@ def get_package_details(length, height, width, description):
 # Глобальная переменная для приложения
 application = None
 
-def setup_application():
-    """Инициализирует приложение один раз при запуске"""
+async def create_application():
+    """Создает и настраивает приложение"""
     global application
     if application is None:
         application = Application.builder().token(BOT_TOKEN).build()
@@ -187,7 +187,7 @@ def setup_application():
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
         
         # Инициализируем приложение
-        application.initialize()
+        await application.initialize()
     
     return application
 
@@ -493,17 +493,17 @@ def home():
 def run_bot():
     """Запускает бота"""
     try:
-        # Настраиваем приложение
-        setup_application()
+        # Настраиваем приложение и webhook в одном event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         
-        # Настраиваем webhook
-        render_external_url = os.getenv('RENDER_EXTERNAL_URL')
-        if render_external_url:
-            # Используем синхронный метод для настройки webhook
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        async def setup():
+            # Создаем и инициализируем приложение
+            await create_application()
             
-            async def setup_webhook():
+            # Настраиваем webhook
+            render_external_url = os.getenv('RENDER_EXTERNAL_URL')
+            if render_external_url:
                 webhook_url = f"{render_external_url}/webhook"
                 await application.bot.delete_webhook()
                 await application.bot.set_webhook(
@@ -512,12 +512,12 @@ def run_bot():
                     drop_pending_updates=True
                 )
                 logger.info(f"✅ Webhook установлен: {webhook_url}")
-            
-            loop.run_until_complete(setup_webhook())
-            loop.close()
+        
+        loop.run_until_complete(setup())
+        loop.close()
         
         # Запускаем Flask приложение
-        port = int(os.environ.get('PORT', 8080))
+        port = int(os.environ.get('PORT', 10000))
         logger.info(f"🚀 Запуск бота на порту {port}")
         app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
         
