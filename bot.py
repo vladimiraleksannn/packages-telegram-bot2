@@ -1,11 +1,10 @@
 import os
 import logging
 import re
-import time
-import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from flask import Flask, request, jsonify
+import asyncio
 
 # Настройка логирования
 logging.basicConfig(
@@ -23,6 +22,9 @@ if not BOT_TOKEN:
 
 # Создаем Flask приложение для webhook
 app = Flask(__name__)
+
+# Глобальная переменная для приложения
+application = None
 
 # База данных пакетов с ссылками на чертежи
 PACKAGES = [
@@ -168,9 +170,6 @@ def get_package_details(length, height, width, description):
         )
     
     return details, drawing_url
-
-# Глобальная переменная для приложения
-application = None
 
 async def create_application():
     """Создает и настраивает приложение"""
@@ -448,35 +447,20 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 Бот автоматически определит тип пакета и предложит альтернативные варианты!
     """)
 
-def webhook_handler(json_data):
-    """Синхронный обработчик webhook запросов от Telegram"""
-    try:
-        # Создаем новое событийное loop для асинхронной обработки
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        async def process_update():
-            update = Update.de_json(data=json_data, bot=application.bot)
-            await application.process_update(update)
-        
-        loop.run_until_complete(process_update())
-        loop.close()
-        
-        return {"status": "ok"}
-    except Exception as e:
-        logger.error(f"Webhook handler error: {e}")
-        return {"status": "error", "message": str(e)}, 500
-
 @app.route('/webhook', methods=['POST'])
-def webhook():
-    """Endpoint для webhook запросов от Telegram"""
+async def webhook():
+    """Async endpoint для webhook запросов от Telegram"""
     try:
         # Получаем JSON данные из запроса
         json_data = request.get_json()
         
-        # Обрабатываем обновление
-        result = webhook_handler(json_data)
-        return jsonify(result)
+        # Создаем Update объект из полученных данных
+        update = Update.de_json(json_data, application.bot)
+        
+        # Обрабатываем обновление через приложение
+        await application.process_update(update)
+        
+        return jsonify({"status": "ok"})
         
     except Exception as e:
         logger.error(f"Error in webhook: {e}")
@@ -490,42 +474,32 @@ def health():
 def home():
     return "Telegram Bot is running!"
 
-def run_bot():
-    """Запускает бота"""
-    try:
-        # Настраиваем приложение и webhook в одном event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        async def setup():
-            # Создаем и инициализируем приложение
-            await create_application()
-            
-            # Настраиваем webhook
-            render_external_url = os.getenv('RENDER_EXTERNAL_URL')
-            if render_external_url:
-                webhook_url = f"{render_external_url}/webhook"
-                await application.bot.delete_webhook()
-                await application.bot.set_webhook(
-                    url=webhook_url,
-                    allowed_updates=["message", "callback_query"],
-                    drop_pending_updates=True
-                )
-                logger.info(f"✅ Webhook установлен: {webhook_url}")
-        
-        loop.run_until_complete(setup())
-        loop.close()
-        
-        # Запускаем Flask приложение
-        port = int(os.environ.get('PORT', 10000))
-        logger.info(f"🚀 Запуск бота на порту {port}")
-        app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
-        
-    except Exception as e:
-        logger.error(f"❌ Критическая ошибка при запуске: {e}")
-        logger.info("🔄 Перезапуск через 10 секунд...")
-        time.sleep(10)
-        run_bot()
+async def main():
+    """Основная асинхронная функция для запуска бота"""
+    # Создаем и инициализируем приложение
+    await create_application()
+    
+    # Настраиваем webhook
+    render_external_url = os.getenv('RENDER_EXTERNAL_URL')
+    if render_external_url:
+        webhook_url = f"{render_external_url}/webhook"
+        await application.bot.delete_webhook()
+        await application.bot.set_webhook(
+            url=webhook_url,
+            allowed_updates=["message", "callback_query"],
+            drop_pending_updates=True
+        )
+        logger.info(f"✅ Webhook установлен: {webhook_url}")
+    
+    # Запускаем приложение (не блокирующий)
+    await application.start()
+    
+    # Запускаем Flask в отдельном потоке
+    port = int(os.environ.get('PORT', 10000))
+    logger.info(f"🚀 Запуск бота на порту {port}")
+    
+    # Не запускаем Flask здесь - Render сделает это сам через startCommand
 
 if __name__ == "__main__":
-    run_bot()
+    # Запускаем основную асинхронную функцию
+    asyncio.run(main())
