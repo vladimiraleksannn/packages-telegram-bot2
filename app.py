@@ -1,6 +1,7 @@
 import os
 import logging
 import re
+import asyncio
 import threading
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
@@ -394,19 +395,20 @@ application.add_handler(CallbackQueryHandler(handle_alternative_search, pattern=
 application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-def process_update(update):
-    """Функция для обработки обновления в отдельном потоке"""
+# Глобальная переменная для хранения event loop
+bot_loop = None
+
+def start_bot():
+    """Запускает бота в отдельном потоке"""
+    global bot_loop
+    bot_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(bot_loop)
+    
     try:
-        # Создаем новый event loop для этого потока
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        # Запускаем обработку обновления
-        loop.run_until_complete(application.process_update(update))
-        loop.close()
+        # Запускаем приложение
+        application.run_polling()
     except Exception as e:
-        logger.error(f"Error processing update: {e}")
+        logger.error(f"Bot error: {e}")
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -423,9 +425,12 @@ def webhook():
         # Создаем Update объект из полученных данных
         update = Update.de_json(json_data, application.bot)
         
-        # Обрабатываем обновление в отдельном потоке
-        thread = threading.Thread(target=process_update, args=(update,))
-        thread.start()
+        # Обрабатываем обновление в основном event loop бота
+        if bot_loop and bot_loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                application.process_update(update), 
+                bot_loop
+            )
         
         return jsonify({"status": "ok"})
         
@@ -447,8 +452,9 @@ def setup_webhook():
     if render_external_url:
         webhook_url = f"{render_external_url}/webhook"
         try:
-            application.bot.delete_webhook()
-            application.bot.set_webhook(
+            # Используем синхронные методы для настройки webhook
+            application.bot._bot.delete_webhook()
+            application.bot._bot.set_webhook(
                 url=webhook_url,
                 allowed_updates=["message", "callback_query"],
                 drop_pending_updates=True
@@ -459,10 +465,15 @@ def setup_webhook():
     else:
         logger.warning("❌ RENDER_EXTERNAL_URL не установлен")
 
-# Настраиваем webhook при импорте
-setup_webhook()
-
 if __name__ == "__main__":
+    # Запускаем бота в отдельном потоке
+    bot_thread = threading.Thread(target=start_bot, daemon=True)
+    bot_thread.start()
+    
+    # Настраиваем webhook
+    setup_webhook()
+    
+    # Запускаем Flask приложение
     port = int(os.environ.get('PORT', 5000))
     logger.info("🤖 Бот запущен и готов к работе!")
     app.run(host='0.0.0.0', port=port, debug=False)
