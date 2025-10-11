@@ -4,6 +4,9 @@ import re
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 
+# Добавляем веб-сервер для поддержания работы
+from keep_alive import keep_alive
+
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -404,6 +407,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """)
 
 def main() -> None:
+    # Запускаем веб-сервер для поддержания работы на Render
+    keep_alive()
+    
     # Используем токен из переменных окружения
     application = Application.builder().token(BOT_TOKEN).build()
     
@@ -421,7 +427,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
     application.add_handler(conv_handler)
     
-    logger.info("🤖 Бот запущен...")
+    logger.info("🤖 Бот запущен и работает на Render...")
     application.run_polling()
 
 if __name__ == "__main__":
