@@ -394,8 +394,8 @@ application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
 @app.route('/webhook', methods=['POST'])
-async def webhook():
-    """Async endpoint для webhook запросов от Telegram"""
+def webhook():
+    """Endpoint для webhook запросов от Telegram"""
     try:
         # Получаем JSON данные из запроса
         json_data = request.get_json()
@@ -405,7 +405,7 @@ async def webhook():
         update = Update.de_json(json_data, application.bot)
         
         # Обрабатываем обновление через приложение
-        await application.process_update(update)
+        application.update_queue.put(update)
         
         return jsonify({"status": "ok"})
         
@@ -421,18 +421,17 @@ def health():
 def home():
     return "Telegram Bot is running!"
 
-async def main():
-    """Основная асинхронная функция"""
-    # Инициализируем приложение
-    await application.initialize()
-    await application.start()
+def main():
+    """Основная функция для запуска на Render"""
+    # Запускаем приложение
+    port = int(os.environ.get('PORT', 5000))
     
     # Настраиваем webhook
     render_external_url = os.getenv('RENDER_EXTERNAL_URL')
     if render_external_url:
         webhook_url = f"{render_external_url}/webhook"
-        await application.bot.delete_webhook()
-        await application.bot.set_webhook(
+        application.bot.delete_webhook()
+        application.bot.set_webhook(
             url=webhook_url,
             allowed_updates=["message", "callback_query"],
             drop_pending_updates=True
@@ -443,14 +442,9 @@ async def main():
     
     logger.info("🤖 Бот запущен и готов к работе!")
     
-    # Запускаем Flask
-    port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🚀 Запуск сервера на порту {port}")
-    
-    # Не используем app.run() в production, Render сам запустит gunicorn
-    if __name__ == "__main__":
-        app.run(host='0.0.0.0', port=port, debug=False)
+    # Запускаем Flask приложение
+    app.run(host='0.0.0.0', port=port, debug=False)
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    # Запускаем бота
+    application.run_polling()
