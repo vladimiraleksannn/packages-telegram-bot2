@@ -24,8 +24,9 @@ if not BOT_TOKEN:
 # Создаем Flask приложение для webhook
 app = Flask(__name__)
 
-# Глобальная переменная для приложения
+# Глобальные переменные
 application = None
+bot_loop = None
 
 # База данных пакетов с ссылками на чертежи
 PACKAGES = [
@@ -174,9 +175,11 @@ def get_package_details(length, height, width, description):
 
 async def create_application():
     """Создает и настраивает приложение"""
-    global application
+    global application, bot_loop
+    
     if application is None:
         application = Application.builder().token(BOT_TOKEN).build()
+        bot_loop = asyncio.new_event_loop()
         
         # Регистрируем обработчики
         application.add_handler(CommandHandler("start", start))
@@ -452,6 +455,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Синхронный обработчик webhook"""
+    global application, bot_loop
+    
     if application is None:
         return jsonify({"status": "error", "message": "Application not initialized"}), 500
         
@@ -459,13 +464,15 @@ def webhook():
         # Получаем JSON данные из запроса
         json_data = request.get_json()
         
-        # Обрабатываем обновление в отдельном потоке
-        async def process_update():
-            update = Update.de_json(json_data, application.bot)
-            await application.process_update(update)
+        # Создаем Update объект
+        update = Update.de_json(json_data, application.bot)
         
-        # Запускаем асинхронную обработку
-        asyncio.run_coroutine_threadsafe(process_update(), application._get_running_loop())
+        # Обрабатываем обновление в event loop бота
+        future = asyncio.run_coroutine_threadsafe(
+            application.process_update(update), 
+            bot_loop
+        )
+        future.result(timeout=10)  # Ждем завершения обработки
         
         return jsonify({"status": "ok"})
         
@@ -481,11 +488,24 @@ def health():
 def home():
     return "Telegram Bot is running!"
 
-def run_flask():
-    """Запускает Flask приложение"""
-    port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🚀 Запуск Flask на порту {port}")
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+def run_bot():
+    """Запускает бота в отдельном потоке"""
+    global bot_loop
+    
+    # Создаем новый event loop для бота
+    bot_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(bot_loop)
+    
+    try:
+        # Настраиваем и запускаем бота
+        bot_loop.run_until_complete(setup_bot())
+        
+        # Запускаем event loop бесконечно
+        bot_loop.run_forever()
+    except Exception as e:
+        logger.error(f"Error in bot thread: {e}")
+    finally:
+        bot_loop.close()
 
 async def setup_bot():
     """Настраивает бота"""
@@ -508,15 +528,22 @@ async def setup_bot():
     else:
         logger.warning("❌ RENDER_EXTERNAL_URL не установлен, webhook не настроен")
 
+def run_flask():
+    """Запускает Flask приложение"""
+    port = int(os.environ.get('PORT', 10000))
+    logger.info(f"🚀 Запуск Flask на порту {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
 def main():
     """Основная функция запуска"""
-    # Запускаем настройку бота в отдельном потоке
-    def run_bot():
-        asyncio.run(setup_bot())
-    
+    # Запускаем бота в отдельном потоке
     bot_thread = threading.Thread(target=run_bot)
     bot_thread.daemon = True
     bot_thread.start()
+    
+    # Даем боту время на настройку
+    import time
+    time.sleep(2)
     
     # Запускаем Flask
     run_flask()
