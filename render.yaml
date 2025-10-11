@@ -11,3 +11,5 @@ services:
         fromService:
           type: secret
           name: bot-token
+    healthCheckPath: /health
+    autoDeploy: true
