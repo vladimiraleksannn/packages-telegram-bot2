@@ -1,6 +1,7 @@
 import os
 import logging
 import re
+import threading
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from flask import Flask, request, jsonify
@@ -393,6 +394,20 @@ application.add_handler(CallbackQueryHandler(handle_alternative_search, pattern=
 application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
+def process_update(update):
+    """Функция для обработки обновления в отдельном потоке"""
+    try:
+        # Создаем новый event loop для этого потока
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Запускаем обработку обновления
+        loop.run_until_complete(application.process_update(update))
+        loop.close()
+    except Exception as e:
+        logger.error(f"Error processing update: {e}")
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Endpoint для webhook запросов от Telegram"""
@@ -401,11 +416,16 @@ def webhook():
         json_data = request.get_json()
         logger.info(f"Received webhook: {json_data}")
         
+        if json_data is None:
+            logger.error("Empty webhook received")
+            return jsonify({"status": "error", "message": "Empty data"}), 400
+        
         # Создаем Update объект из полученных данных
         update = Update.de_json(json_data, application.bot)
         
-        # Обрабатываем обновление через приложение
-        application.update_queue.put(update)
+        # Обрабатываем обновление в отдельном потоке
+        thread = threading.Thread(target=process_update, args=(update,))
+        thread.start()
         
         return jsonify({"status": "ok"})
         
@@ -421,30 +441,28 @@ def health():
 def home():
     return "Telegram Bot is running!"
 
-def main():
-    """Основная функция для запуска на Render"""
-    # Запускаем приложение
-    port = int(os.environ.get('PORT', 5000))
-    
-    # Настраиваем webhook
+def setup_webhook():
+    """Настройка webhook при запуске приложения"""
     render_external_url = os.getenv('RENDER_EXTERNAL_URL')
     if render_external_url:
         webhook_url = f"{render_external_url}/webhook"
-        application.bot.delete_webhook()
-        application.bot.set_webhook(
-            url=webhook_url,
-            allowed_updates=["message", "callback_query"],
-            drop_pending_updates=True
-        )
-        logger.info(f"✅ Webhook установлен: {webhook_url}")
+        try:
+            application.bot.delete_webhook()
+            application.bot.set_webhook(
+                url=webhook_url,
+                allowed_updates=["message", "callback_query"],
+                drop_pending_updates=True
+            )
+            logger.info(f"✅ Webhook установлен: {webhook_url}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка настройки webhook: {e}")
     else:
         logger.warning("❌ RENDER_EXTERNAL_URL не установлен")
-    
-    logger.info("🤖 Бот запущен и готов к работе!")
-    
-    # Запускаем Flask приложение
-    app.run(host='0.0.0.0', port=port, debug=False)
+
+# Настраиваем webhook при импорте
+setup_webhook()
 
 if __name__ == "__main__":
-    # Запускаем бота
-    application.run_polling()
+    port = int(os.environ.get('PORT', 5000))
+    logger.info("🤖 Бот запущен и готов к работе!")
+    app.run(host='0.0.0.0', port=port, debug=False)
