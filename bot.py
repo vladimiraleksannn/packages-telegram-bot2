@@ -6,9 +6,10 @@ import sys
 import time
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
+from telegram.error import Conflict
 
 # Добавляем веб-сервер для поддержания работы
-from keep_alive import keep_alive
+from keep_alive import keep_alive, app
 
 # Настройка логирования
 logging.basicConfig(
@@ -369,7 +370,7 @@ async def handle_back_to_last_search(update: Update, context: ContextTypes.DEFAU
     query = update.callback_query
     await query.answer()
     
-    # Получаем сохраненные данные о последнем поиске
+    # Получаем сохраненные данные о последнем поиска
     last_sizes = context.user_data.get('last_search_sizes')
     last_type = context.user_data.get('last_search_type')
     
@@ -418,17 +419,13 @@ def signal_handler(signum, frame):
     logger.info("🛑 Получен сигнал завершения...")
     sys.exit(0)
 
-def main():
-    """Основная функция с обработкой ошибок и автоматическим перезапуском"""
-    # Регистрируем обработчики сигналов
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    # Запускаем веб-сервер для поддержания работы на Render
-    keep_alive()
-    
-    try:
-        # Используем токен из переменных окружения
+# Глобальная переменная для приложения
+application = None
+
+async def setup_application():
+    """Настраивает и возвращает приложение"""
+    global application
+    if application is None:
         application = Application.builder().token(BOT_TOKEN).build()
         
         # Создаем ConversationHandler для обработки диалога
@@ -444,21 +441,84 @@ def main():
         application.add_handler(CallbackQueryHandler(handle_alternative_search, pattern="^alternative_"))
         application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
         application.add_handler(conv_handler)
-        
-        logger.info("🤖 Бот запущен и работает на Render...")
-        
-        # Используем polling с обработкой исключений
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True,
-            close_loop=False
+    
+    return application
+
+async def webhook_handler(request):
+    """Обработчик webhook запросов от Telegram"""
+    try:
+        application = await setup_application()
+        await application.update_queue.put(
+            Update.de_json(data=await request.json(), bot=application.bot)
         )
-        
+        return {"status": "ok"}
     except Exception as e:
-        logger.error(f"❌ Критическая ошибка: {e}")
-        logger.info("🔄 Перезапуск бота через 10 секунд...")
+        logger.error(f"Webhook error: {e}")
+        return {"status": "error", "message": str(e)}, 500
+
+def main():
+    """Основная функция с webhook для Render"""
+    # Регистрируем обработчики сигналов
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    try:
+        # Запускаем веб-сервер
+        keep_alive()
+        
+        # Получаем URL для webhook из переменных окружения Render
+        render_external_url = os.getenv('RENDER_EXTERNAL_URL')
+        
+        if render_external_url:
+            logger.info("🚀 Запуск в режиме Webhook на Render")
+            
+            # Настраиваем webhook при запуске
+            import asyncio
+            
+            async def setup_webhook():
+                app = await setup_application()
+                webhook_url = f"{render_external_url}/webhook"
+                
+                # Удаляем старый webhook и устанавливаем новый
+                await app.bot.delete_webhook()
+                await app.bot.set_webhook(
+                    url=webhook_url,
+                    allowed_updates=Update.ALL_TYPES,
+                    drop_pending_updates=True
+                )
+                logger.info(f"✅ Webhook установлен: {webhook_url}")
+            
+            # Запускаем настройку webhook
+            asyncio.run(setup_webhook())
+            
+            # Бот теперь работает через webhook, Flask сервер обрабатывает запросы
+            logger.info("🤖 Бот запущен в режиме webhook и готов к работе!")
+            
+        else:
+            logger.info("🔍 Запуск в режиме Polling (для локальной разработки)")
+            
+            # Режим polling для локальной разработки
+            async def run_polling():
+                app = await setup_application()
+                await app.initialize()
+                await app.start()
+                await app.updater.start_polling(
+                    allowed_updates=Update.ALL_TYPES,
+                    drop_pending_updates=True
+                )
+                logger.info("🤖 Бот запущен в режиме polling")
+                
+                # Бесконечный цикл
+                while True:
+                    await asyncio.sleep(3600)  # Спим 1 час
+                    
+            asyncio.run(run_polling())
+            
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка при запуске: {e}")
+        logger.info("🔄 Перезапуск через 10 секунд...")
         time.sleep(10)
-        main()  # Рекурсивный перезапуск
+        main()
 
 if __name__ == "__main__":
     main()
