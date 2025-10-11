@@ -434,6 +434,9 @@ async def setup_application():
         application.add_handler(CallbackQueryHandler(handle_alternative_search, pattern="^alternative_"))
         application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
         application.add_handler(conv_handler)
+        
+        # Инициализируем приложение
+        await application.initialize()
     
     return application
 
@@ -505,7 +508,6 @@ def main():
             # Режим polling для локальной разработки
             async def run_polling():
                 app = await setup_application()
-                await app.initialize()
                 await app.start()
                 await app.updater.start_polling(
                     allowed_updates=["message", "callback_query"],
