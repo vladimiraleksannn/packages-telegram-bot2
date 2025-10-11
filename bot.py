@@ -1,13 +1,9 @@
 import os
 import logging
 import re
-import asyncio
-import threading
-import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from flask import Flask, request, jsonify
-import requests
 
 # Настройка логирования
 logging.basicConfig(
@@ -26,9 +22,8 @@ if not BOT_TOKEN:
 # Создаем Flask приложение
 app = Flask(__name__)
 
-# Глобальные переменные
-application = None
-bot_loop = None
+# Создаем приложение Telegram
+application = Application.builder().token(BOT_TOKEN).build()
 
 # База данных пакетов
 PACKAGES = [
@@ -99,7 +94,6 @@ PACKAGES = [
 ]
 
 def get_package_type(description):
-    """Определяет тип пакета по описанию"""
     if "верт." in description.lower():
         return "вертикальный"
     elif "гор." in description.lower():
@@ -110,7 +104,6 @@ def get_package_type(description):
         return "неизвестный"
 
 def get_requested_type(length, height, width):
-    """Определяет тип запрашиваемого пакета"""
     if length > height:
         return "горизонтальный"
     elif height > length:
@@ -119,7 +112,6 @@ def get_requested_type(length, height, width):
         return "квадратный"
 
 def find_matching_packages_by_type(length, height, width, package_type, max_results=5):
-    """Находит пакеты определенного типа, соответствующие размерам с допуском 50мм"""
     all_matching = []
     
     for pkg_length, pkg_height, pkg_width, desc, _ in PACKAGES:
@@ -141,7 +133,6 @@ def find_matching_packages_by_type(length, height, width, package_type, max_resu
     return [(l, h, w, d) for l, h, w, d, _ in all_matching[:max_results]]
 
 def get_package_details(length, height, width, description):
-    """Возвращает детали пакета для отображения при клике"""
     drawing_url = None
     for pkg_length, pkg_height, pkg_width, desc, url in PACKAGES:
         if (pkg_length == length and pkg_height == height and 
@@ -167,26 +158,6 @@ def get_package_details(length, height, width, description):
     
     return details, drawing_url
 
-async def create_application():
-    """Создает и настраивает приложение"""
-    global application
-    
-    if application is None:
-        application = Application.builder().token(BOT_TOKEN).build()
-        
-        # Регистрируем обработчики
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CallbackQueryHandler(handle_package_click, pattern="^package_"))
-        application.add_handler(CallbackQueryHandler(handle_alternative_search, pattern="^alternative_"))
-        application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-        
-        await application.initialize()
-        await application.start()
-    
-    return application
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     welcome_text = """
 👋 Привет! Я бот для поиска пакетов.
@@ -203,7 +174,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_html(welcome_text)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает все текстовые сообщения"""
     try:
         text = update.message.text.strip()
         logger.info(f"Получено сообщение: {text}")
@@ -238,7 +208,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
 
 async def show_search_results(update, context, length, height, width, search_type, is_alternative=False):
-    """Показывает результаты поиска с кнопками"""
     try:
         context.user_data['current_sizes'] = (length, height, width)
         context.user_data['current_type'] = search_type
@@ -312,7 +281,6 @@ async def show_search_results(update, context, length, height, width, search_typ
             await update.edit_message_text(text=error_msg, parse_mode='HTML')
 
 async def handle_package_click(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает клик по пакету"""
     try:
         query = update.callback_query
         await query.answer()
@@ -363,7 +331,6 @@ async def handle_package_click(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.error(f"Error in handle_package_click: {e}")
 
 async def handle_alternative_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает запрос на альтернативный поиск"""
     try:
         query = update.callback_query
         await query.answer()
@@ -380,7 +347,6 @@ async def handle_alternative_search(update: Update, context: ContextTypes.DEFAUL
         logger.error(f"Error in handle_alternative_search: {e}")
 
 async def handle_back_to_last_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает возврат к последнему результату поиска из деталей пакета"""
     try:
         query = update.callback_query
         await query.answer()
@@ -419,24 +385,27 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 Бот автоматически определит тип пакета и предложит альтернативные варианты!
     """)
 
+# Регистрируем обработчики
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("help", help_command))
+application.add_handler(CallbackQueryHandler(handle_package_click, pattern="^package_"))
+application.add_handler(CallbackQueryHandler(handle_alternative_search, pattern="^alternative_"))
+application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
 @app.route('/webhook', methods=['POST'])
-def webhook():
-    """Синхронный обработчик webhook"""
-    global application
-    
-    if application is None:
-        logger.error("Application not initialized")
-        return jsonify({"status": "error", "message": "Application not initialized"}), 500
-        
+async def webhook():
+    """Async endpoint для webhook запросов от Telegram"""
     try:
+        # Получаем JSON данные из запроса
         json_data = request.get_json()
+        logger.info(f"Received webhook: {json_data}")
+        
+        # Создаем Update объект из полученных данных
         update = Update.de_json(json_data, application.bot)
         
-        # Обрабатываем обновление в основном event loop
-        asyncio.run_coroutine_threadsafe(
-            application.process_update(update), 
-            bot_loop
-        )
+        # Обрабатываем обновление через приложение
+        await application.process_update(update)
         
         return jsonify({"status": "ok"})
         
@@ -445,30 +414,20 @@ def webhook():
         return jsonify({"status": "error"}), 500
 
 @app.route('/health', methods=['GET'])
-def health_check():
-    """Health check endpoint для Render"""
-    return jsonify({"status": "healthy", "service": "telegram-bot"})
+def health():
+    return jsonify({"status": "healthy"})
 
 @app.route('/')
 def home():
     return "Telegram Bot is running!"
 
-def keep_alive():
-    """Периодически пингует приложение чтобы не засыпало"""
-    while True:
-        try:
-            response = requests.get(f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', '')}/health", timeout=10)
-            logger.info(f"Keep-alive ping: {response.status_code}")
-        except Exception as e:
-            logger.warning(f"Keep-alive failed: {e}")
-        time.sleep(300)  # Пинг каждые 5 минут
-
-async def setup_bot():
-    """Настраивает бота"""
-    global application
+async def main():
+    """Основная асинхронная функция"""
+    # Инициализируем приложение
+    await application.initialize()
+    await application.start()
     
-    await create_application()
-    
+    # Настраиваем webhook
     render_external_url = os.getenv('RENDER_EXTERNAL_URL')
     if render_external_url:
         webhook_url = f"{render_external_url}/webhook"
@@ -481,70 +440,17 @@ async def setup_bot():
         logger.info(f"✅ Webhook установлен: {webhook_url}")
     else:
         logger.warning("❌ RENDER_EXTERNAL_URL не установлен")
-
-def run_bot():
-    """Запускает бота в отдельном потоке"""
-    global bot_loop
     
-    bot_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(bot_loop)
-    
-    try:
-        bot_loop.run_until_complete(setup_bot())
-        logger.info("🤖 Бот запущен и готов к работе")
-        bot_loop.run_forever()
-    except Exception as e:
-        logger.error(f"Error in bot thread: {e}")
-    finally:
-        bot_loop.close()
-
-def run_flask():
-    """Запускает Flask приложение"""
-    port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🚀 Запуск Flask на порту {port}")
-    
-    # Используем production WSGI server
-    from gunicorn.app.base import BaseApplication
-
-    class FlaskApplication(BaseApplication):
-        def __init__(self, app, options=None):
-            self.options = options or {}
-            self.application = app
-            super().__init__()
-
-        def load_config(self):
-            for key, value in self.options.items():
-                self.cfg.set(key, value)
-
-        def load(self):
-            return self.application
-
-    options = {
-        'bind': f'0.0.0.0:{port}',
-        'workers': 1,
-        'timeout': 60,
-        'preload_app': True
-    }
-    
-    FlaskApplication(app, options).run()
-
-def main():
-    """Основная функция запуска"""
-    # Запускаем keep-alive в отдельном потоке
-    keep_alive_thread = threading.Thread(target=keep_alive)
-    keep_alive_thread.daemon = True
-    keep_alive_thread.start()
-    
-    # Запускаем бота в отдельном потоке
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
-    
-    # Даем время на инициализацию
-    time.sleep(3)
+    logger.info("🤖 Бот запущен и готов к работе!")
     
     # Запускаем Flask
-    run_flask()
+    port = int(os.environ.get('PORT', 10000))
+    logger.info(f"🚀 Запуск сервера на порту {port}")
+    
+    # Не используем app.run() в production, Render сам запустит gunicorn
+    if __name__ == "__main__":
+        app.run(host='0.0.0.0', port=port, debug=False)
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
