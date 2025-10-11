@@ -2,10 +2,12 @@ import os
 import logging
 import re
 import asyncio
+import threading
+import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from flask import Flask, request, jsonify
-import threading
+import requests
 
 # Настройка логирования
 logging.basicConfig(
@@ -21,16 +23,16 @@ if not BOT_TOKEN:
     logger.error("❌ BOT_TOKEN не установлен!")
     exit(1)
 
-# Создаем Flask приложение для webhook
+# Создаем Flask приложение
 app = Flask(__name__)
 
 # Глобальные переменные
 application = None
 bot_loop = None
 
-# База данных пакетов с ссылками на чертежи
+# База данных пакетов
 PACKAGES = [
-    # Вертикальные пакеты с первого скрина
+    # Вертикальные пакеты
     (250, 350, 90, "Пакет верт. д250 ш90 в350 / с ручками / Штамп 1158", "https://disk.360.yandex.ru/d/Peyk8BPpIlnZhA"),
     (100, 120, 90, "Пакет верт. д100 ш90 в120 / Штамп 512", "https://disk.360.yandex.ru/d/3-yN-eN1W8_oFA"),
     (110, 360, 100, "Пакет верт. д110 ш100 в360 / дно без нахлеста / Штамп 095", "https://disk.360.yandex.ru/d/VFv4p5Z1Kg76WQ"),
@@ -63,11 +65,9 @@ PACKAGES = [
     (300, 350, 135, "Пакет верт. д300 ш135 в350 / половинка пакета / Штамп 570", "https://disk.360.yandex.ru/d/3hAmNimaQ0ofDA"),
     (300, 400, 150, "Пакет верт. д300 ш150 в400 / половинка пакета / Штамп 769", "https://disk.360.yandex.ru/d/EeiPrlgFutVcGw"),
     (340, 480, 150, "Пакет верт. д340 ш150 в480 / половинка пакета / Штамп 772", "https://disk.360.yandex.ru/d/72Rbqxbljdez2A"),
-    
-    # Вертикальные пакеты со второго скрина
     (350, 450, 100, "Пакет верт. д350 ш100 в450 / половинка пакета / Штамп 478", "https://disk.360.yandex.ru/d/kyEe7JWJl071UQ"),
     
-    # Горизонтальные пакеты со второго скрина
+    # Горизонтальные пакеты
     (160, 140, 80, "Пакет гор. д160 ш80 в140 / 3 на листе / Штамп 980", "https://disk.360.yandex.ru/d/_0Qx-vmY5-ImbQ"),
     (220, 180, 125, "Пакет гор. д220 ш125 в180 / отверстия под ленты / Штамп 919", "https://disk.360.yandex.ru/d/CGStQuXiiw4U-g"),
     (230, 180, 90, "Пакет гор. д230 ш90 в180 / Штамп 096", "https://disk.360.yandex.ru/d/BzRmOcxFebIJzg"),
@@ -92,7 +92,7 @@ PACKAGES = [
     (500, 400, 200, "Пакет гор. д500 ш200 в400 / половинка пакета / нужна 'заплатка' на дно / Штамп 533", "https://disk.360.yandex.ru/d/C9We9YAafSvSHw"),
     (530, 340, 170, "Пакет гор. д530 ш170 в340 / половинка пакета / Штамп 379", "https://disk.360.yandex.ru/d/9VchoXrY3U0JPA"),
     
-    # Квадратные/универсальные пакеты со второго скрина
+    # Квадратные пакеты
     (150, 150, 80, "Пакет д150 ш80 в150 / Штамп 230", "https://disk.360.yandex.ru/d/C81M3tOCOslx4g"),
     (220, 220, 120, "Пакет д220 ш120 в220 / Штамп 427", "https://disk.360.yandex.ru/d/69V_z4FbsvDiag"),
     (220, 220, 120, "Пакет д220 ш120 в220 / отверстия под ленты / Штамп 846", "https://disk.360.yandex.ru/d/P2TtXuwkP1MpAQ"),
@@ -123,31 +123,25 @@ def find_matching_packages_by_type(length, height, width, package_type, max_resu
     all_matching = []
     
     for pkg_length, pkg_height, pkg_width, desc, _ in PACKAGES:
-        # Проверяем тип пакета
         current_type = get_package_type(desc)
         if current_type != package_type:
             continue
             
-        # Проверяем соответствие размеров с допуском 50мм
         if (abs(pkg_length - length) <= 50 and 
             abs(pkg_height - height) <= 50 and 
             abs(pkg_width - width) <= 50):
             
-            # Вычисляем общее отклонение для сортировки
             total_diff = (abs(pkg_length - length) + 
                          abs(pkg_height - height) + 
                          abs(pkg_width - width))
             
             all_matching.append((pkg_length, pkg_height, pkg_width, desc, total_diff))
     
-    # Сортируем по общему отклонению
     all_matching.sort(key=lambda x: x[4])
-    
     return [(l, h, w, d) for l, h, w, d, _ in all_matching[:max_results]]
 
 def get_package_details(length, height, width, description):
     """Возвращает детали пакета для отображения при клике"""
-    # Находим пакет в базе данных
     drawing_url = None
     for pkg_length, pkg_height, pkg_width, desc, url in PACKAGES:
         if (pkg_length == length and pkg_height == height and 
@@ -175,11 +169,10 @@ def get_package_details(length, height, width, description):
 
 async def create_application():
     """Создает и настраивает приложение"""
-    global application, bot_loop
+    global application
     
     if application is None:
         application = Application.builder().token(BOT_TOKEN).build()
-        bot_loop = asyncio.new_event_loop()
         
         # Регистрируем обработчики
         application.add_handler(CommandHandler("start", start))
@@ -189,7 +182,6 @@ async def create_application():
         application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
         
-        # Инициализируем приложение
         await application.initialize()
         await application.start()
     
@@ -216,7 +208,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         text = update.message.text.strip()
         logger.info(f"Получено сообщение: {text}")
         
-        # Убираем все лишние символы и оставляем только цифры и пробелы
         cleaned_text = re.sub(r'[^\d\s]', ' ', text)
         numbers = re.findall(r'\d+', cleaned_text)
         
@@ -234,11 +225,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         
         requested_type = get_requested_type(length, height, width)
         
-        # Сохраняем оригинальные размеры и тип
         context.user_data['original_sizes'] = (length, height, width)
         context.user_data['original_type'] = requested_type
         
-        # Вызываем функцию для отображения результатов
         await show_search_results(update, context, length, height, width, requested_type)
         
     except Exception as e:
@@ -251,11 +240,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def show_search_results(update, context, length, height, width, search_type, is_alternative=False):
     """Показывает результаты поиска с кнопками"""
     try:
-        # Сохраняем текущий контекст
         context.user_data['current_sizes'] = (length, height, width)
         context.user_data['current_type'] = search_type
         
-        # Находим пакеты для запрошенного типа
         matching_packages = find_matching_packages_by_type(length, height, width, search_type, max_results=5)
         
         if search_type == "вертикальный":
@@ -271,17 +258,14 @@ async def show_search_results(update, context, length, height, width, search_typ
             response = f"📦 <b>{type_display.capitalize()} пакеты</b> для {length}×{height}×{width} мм (д×в×ш, отклонение ±50 мм):\n\n"
         
         if matching_packages:
-            # Создаем inline клавиатуру для каждого пакета
             keyboard = []
             
             for i, (l, h, w, d) in enumerate(matching_packages, 1):
                 response += f"😊 {i}. {l} × {h} × {w} мм\n   {d}\n\n"
-                # Создаем callback_data в формате: package_L_H_W
                 callback_data = f"package_{l}_{h}_{w}"
                 keyboard.append([InlineKeyboardButton(f"📦 Пакет {i}: {l}×{h}×{w} мм", callback_data=callback_data)])
             
-            # Определяем альтернативный тип для кнопки
-            alt_length, alt_height = height, length  # Меняем местами длину и высоту
+            alt_length, alt_height = height, length
             
             if search_type == "горизонтальный":
                 alt_type_display = "вертикальные"
@@ -290,7 +274,6 @@ async def show_search_results(update, context, length, height, width, search_typ
                 alt_type_display = "горизонтальные"
                 alt_type = "горизонтальный"
             
-            # Добавляем кнопку для альтернативного поиска
             alt_callback = f"alternative_{alt_length}_{alt_height}_{width}_{alt_type}"
             keyboard.append([InlineKeyboardButton(f"🔍 Показать {alt_type_display}", callback_data=alt_callback)])
             
@@ -303,7 +286,6 @@ async def show_search_results(update, context, length, height, width, search_typ
         else:
             response += "❌ Пакеты не найдены\n\n"
             
-            # Определяем альтернативный тип для кнопки
             alt_length, alt_height = height, length
             
             if search_type == "горизонтальный":
@@ -314,7 +296,6 @@ async def show_search_results(update, context, length, height, width, search_typ
                 alt_type = "горизонтальный"
             
             keyboard = [[InlineKeyboardButton(f"🔍 Показать {alt_type_display}", callback_data=f"alternative_{alt_length}_{alt_height}_{width}_{alt_type}")]]
-            
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             if hasattr(update, 'message'):
@@ -336,31 +317,25 @@ async def handle_package_click(update: Update, context: ContextTypes.DEFAULT_TYP
         query = update.callback_query
         await query.answer()
         
-        # Извлекаем данные из callback_data
         callback_data = query.data
         
         if callback_data.startswith("package_"):
-            # Формат: package_L_H_W
             parts = callback_data.split("_")
             if len(parts) == 4:
                 length = int(parts[1])
                 height = int(parts[2])
                 width = int(parts[3])
                 
-                # Находим описание пакета в базе данных
                 description = ""
                 for pkg_length, pkg_height, pkg_width, desc, _ in PACKAGES:
                     if pkg_length == length and pkg_height == height and pkg_width == width:
                         description = desc
                         break
                 
-                # Получаем детали пакета и ссылку
                 details, drawing_url = get_package_details(length, height, width, description)
                 
-                # Создаем клавиатуру с кнопками "Назад" и "Скопировать ссылку" (если есть ссылка)
                 keyboard = []
                 
-                # Кнопка "Назад" - возвращаемся к текущему результату поиска
                 current_sizes = context.user_data.get('current_sizes', (0, 0, 0))
                 current_type = context.user_data.get('current_type', 'горизонтальный')
                 
@@ -369,13 +344,11 @@ async def handle_package_click(update: Update, context: ContextTypes.DEFAULT_TYP
                 else:
                     back_text = "⬅️ Назад к горизонтальным"
                     
-                # Сохраняем данные для возврата
                 context.user_data['last_search_sizes'] = current_sizes
                 context.user_data['last_search_type'] = current_type
                 
                 keyboard.append([InlineKeyboardButton(back_text, callback_data="back_to_last_search")])
                 
-                # Кнопка "Скопировать ссылку" если есть ссылка
                 if drawing_url:
                     keyboard.append([InlineKeyboardButton("📋 Скопировать ссылку", url=drawing_url)])
                 
@@ -395,15 +368,13 @@ async def handle_alternative_search(update: Update, context: ContextTypes.DEFAUL
         query = update.callback_query
         await query.answer()
         
-        # Формат: alternative_L_H_W_type
         parts = query.data.split("_")
         if len(parts) == 5:
             length = int(parts[1])
             height = int(parts[2])
             width = int(parts[3])
-            search_type = parts[4]  # "вертикальный" или "горизонтальный"
+            search_type = parts[4]
             
-            # Показываем результаты альтернативного поиска
             await show_search_results(query, context, length, height, width, search_type, is_alternative=True)
     except Exception as e:
         logger.error(f"Error in handle_alternative_search: {e}")
@@ -414,19 +385,15 @@ async def handle_back_to_last_search(update: Update, context: ContextTypes.DEFAU
         query = update.callback_query
         await query.answer()
         
-        # Получаем сохраненные данные о последнем поиска
         last_sizes = context.user_data.get('last_search_sizes')
         last_type = context.user_data.get('last_search_type')
         
         if last_sizes and last_type:
             length, height, width = last_sizes
-            # Определяем, был ли это альтернативный поиск
             is_alternative = (last_sizes != context.user_data.get('original_sizes', last_sizes))
             
-            # Показываем результаты поиска
             await show_search_results(query, context, length, height, width, last_type, is_alternative=is_alternative)
         else:
-            # Если данных нет, возвращаем к началу
             await query.edit_message_text(
                 text="❌ Не удалось вернуться к результатам поиска. Введите новые размеры.",
                 parse_mode='HTML'
@@ -455,24 +422,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Синхронный обработчик webhook"""
-    global application, bot_loop
+    global application
     
     if application is None:
+        logger.error("Application not initialized")
         return jsonify({"status": "error", "message": "Application not initialized"}), 500
         
     try:
-        # Получаем JSON данные из запроса
         json_data = request.get_json()
-        
-        # Создаем Update объект
         update = Update.de_json(json_data, application.bot)
         
-        # Обрабатываем обновление в event loop бота
-        future = asyncio.run_coroutine_threadsafe(
+        # Обрабатываем обновление в основном event loop
+        asyncio.run_coroutine_threadsafe(
             application.process_update(update), 
             bot_loop
         )
-        future.result(timeout=10)  # Ждем завершения обработки
         
         return jsonify({"status": "ok"})
         
@@ -481,40 +445,30 @@ def webhook():
         return jsonify({"status": "error"}), 500
 
 @app.route('/health', methods=['GET'])
-def health():
-    return "OK"
+def health_check():
+    """Health check endpoint для Render"""
+    return jsonify({"status": "healthy", "service": "telegram-bot"})
 
 @app.route('/')
 def home():
     return "Telegram Bot is running!"
 
-def run_bot():
-    """Запускает бота в отдельном потоке"""
-    global bot_loop
-    
-    # Создаем новый event loop для бота
-    bot_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(bot_loop)
-    
-    try:
-        # Настраиваем и запускаем бота
-        bot_loop.run_until_complete(setup_bot())
-        
-        # Запускаем event loop бесконечно
-        bot_loop.run_forever()
-    except Exception as e:
-        logger.error(f"Error in bot thread: {e}")
-    finally:
-        bot_loop.close()
+def keep_alive():
+    """Периодически пингует приложение чтобы не засыпало"""
+    while True:
+        try:
+            response = requests.get(f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', '')}/health", timeout=10)
+            logger.info(f"Keep-alive ping: {response.status_code}")
+        except Exception as e:
+            logger.warning(f"Keep-alive failed: {e}")
+        time.sleep(300)  # Пинг каждые 5 минут
 
 async def setup_bot():
     """Настраивает бота"""
     global application
     
-    # Создаем и настраиваем приложение
     await create_application()
     
-    # Настраиваем webhook
     render_external_url = os.getenv('RENDER_EXTERNAL_URL')
     if render_external_url:
         webhook_url = f"{render_external_url}/webhook"
@@ -526,24 +480,68 @@ async def setup_bot():
         )
         logger.info(f"✅ Webhook установлен: {webhook_url}")
     else:
-        logger.warning("❌ RENDER_EXTERNAL_URL не установлен, webhook не настроен")
+        logger.warning("❌ RENDER_EXTERNAL_URL не установлен")
+
+def run_bot():
+    """Запускает бота в отдельном потоке"""
+    global bot_loop
+    
+    bot_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(bot_loop)
+    
+    try:
+        bot_loop.run_until_complete(setup_bot())
+        logger.info("🤖 Бот запущен и готов к работе")
+        bot_loop.run_forever()
+    except Exception as e:
+        logger.error(f"Error in bot thread: {e}")
+    finally:
+        bot_loop.close()
 
 def run_flask():
     """Запускает Flask приложение"""
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Запуск Flask на порту {port}")
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    
+    # Используем production WSGI server
+    from gunicorn.app.base import BaseApplication
+
+    class FlaskApplication(BaseApplication):
+        def __init__(self, app, options=None):
+            self.options = options or {}
+            self.application = app
+            super().__init__()
+
+        def load_config(self):
+            for key, value in self.options.items():
+                self.cfg.set(key, value)
+
+        def load(self):
+            return self.application
+
+    options = {
+        'bind': f'0.0.0.0:{port}',
+        'workers': 1,
+        'timeout': 60,
+        'preload_app': True
+    }
+    
+    FlaskApplication(app, options).run()
 
 def main():
     """Основная функция запуска"""
+    # Запускаем keep-alive в отдельном потоке
+    keep_alive_thread = threading.Thread(target=keep_alive)
+    keep_alive_thread.daemon = True
+    keep_alive_thread.start()
+    
     # Запускаем бота в отдельном потоке
     bot_thread = threading.Thread(target=run_bot)
     bot_thread.daemon = True
     bot_thread.start()
     
-    # Даем боту время на настройку
-    import time
-    time.sleep(2)
+    # Даем время на инициализацию
+    time.sleep(3)
     
     # Запускаем Flask
     run_flask()
