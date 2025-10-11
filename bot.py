@@ -187,8 +187,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def handle_size(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         text = update.message.text.strip()
-        numbers = re.findall(r'\d+', text)
-
+        logger.info(f"Получено сообщение: {text}")
+        
+        # Убираем все лишние символы и оставляем только цифры и пробелы
+        cleaned_text = re.sub(r'[^\d\s]', ' ', text)
+        numbers = re.findall(r'\d+', cleaned_text)
+        
+        logger.info(f"Найдены числа: {numbers}")
+        
         if len(numbers) < 3:
             await update.message.reply_html(
                 "❌ Введите три числа: <b>длина высота ширина</b>\n"
@@ -197,6 +203,8 @@ async def handle_size(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
 
         length, height, width = map(int, numbers[:3])
+        logger.info(f"Распознаны размеры: {length}×{height}×{width}")
+        
         requested_type = get_requested_type(length, height, width)
         
         # Сохраняем оригинальные размеры и тип
@@ -209,176 +217,195 @@ async def handle_size(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     except Exception as e:
         logger.error(f"Error in handle_size: {e}")
         await update.message.reply_html(
-            "❌ Ошибка. Введите размеры в формате: <code>длина высота ширина</code>"
+            "❌ Ошибка. Введите размеры в формате: <code>длина высота ширина</code>\n"
+            "Например: <code>400 300 150</code>"
         )
 
 async def show_search_results(update, context, length, height, width, search_type, is_alternative=False):
     """Показывает результаты поиска с кнопками"""
-    # Сохраняем текущий контекст
-    context.user_data['current_sizes'] = (length, height, width)
-    context.user_data['current_type'] = search_type
-    
-    # Находим пакеты для запрошенного типа
-    matching_packages = find_matching_packages_by_type(length, height, width, search_type, max_results=5)
-    
-    if search_type == "вертикальный":
-        type_display = "вертикальные"
-    elif search_type == "горизонтальный":
-        type_display = "горизонтальные"
-    else:
-        type_display = "квадратные"
-    
-    if is_alternative:
-        response = f"📦 <b>{type_display.capitalize()} пакеты</b> для {length}×{height}×{width} мм (д×в×ш):\n\n"
-    else:
-        response = f"📦 <b>{type_display.capitalize()} пакеты</b> для {length}×{height}×{width} мм (д×в×ш, отклонение ±50 мм):\n\n"
-    
-    if matching_packages:
-        # Создаем inline клавиатуру для каждого пакета
-        keyboard = []
+    try:
+        # Сохраняем текущий контекст
+        context.user_data['current_sizes'] = (length, height, width)
+        context.user_data['current_type'] = search_type
         
-        for i, (l, h, w, d) in enumerate(matching_packages, 1):
-            response += f"😊 {i}. {l} × {h} × {w} мм\n   {d}\n\n"
-            # Создаем callback_data в формате: package_L_H_W
-            callback_data = f"package_{l}_{h}_{w}"
-            keyboard.append([InlineKeyboardButton(f"📦 Пакет {i}: {l}×{h}×{w} мм", callback_data=callback_data)])
+        # Находим пакеты для запрошенного типа
+        matching_packages = find_matching_packages_by_type(length, height, width, search_type, max_results=5)
         
-        # Определяем альтернативный тип для кнопки
-        alt_length, alt_height = height, length  # Меняем местами длину и высоту
-        
-        if search_type == "горизонтальный":
-            alt_type_display = "вертикальные"
-            alt_type = "вертикальный"
+        if search_type == "вертикальный":
+            type_display = "вертикальные"
+        elif search_type == "горизонтальный":
+            type_display = "горизонтальные"
         else:
-            alt_type_display = "горизонтальные"
-            alt_type = "горизонтальный"
+            type_display = "квадратные"
         
-        # Добавляем кнопку для альтернативного поиска
-        alt_callback = f"alternative_{alt_length}_{alt_height}_{width}_{alt_type}"
-        keyboard.append([InlineKeyboardButton(f"🔍 Показать {alt_type_display}", callback_data=alt_callback)])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        if hasattr(update, 'message'):
-            await update.message.reply_html(response, reply_markup=reply_markup)
+        if is_alternative:
+            response = f"📦 <b>{type_display.capitalize()} пакеты</b> для {length}×{height}×{width} мм (д×в×ш):\n\n"
         else:
-            await update.edit_message_text(text=response, parse_mode='HTML', reply_markup=reply_markup)
-    else:
-        response += "❌ Пакеты не найдены\n\n"
+            response = f"📦 <b>{type_display.capitalize()} пакеты</b> для {length}×{height}×{width} мм (д×в×ш, отклонение ±50 мм):\n\n"
         
-        # Определяем альтернативный тип для кнопки
-        alt_length, alt_height = height, length
-        
-        if search_type == "горизонтальный":
-            alt_type_display = "вертикальные"
-            alt_type = "вертикальный"
-        else:
-            alt_type_display = "горизонтальные"
-            alt_type = "горизонтальный"
-        
-        keyboard = [[InlineKeyboardButton(f"🔍 Показать {alt_type_display}", callback_data=f"alternative_{alt_length}_{alt_height}_{width}_{alt_type}")]]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        if hasattr(update, 'message'):
-            await update.message.reply_html(response, reply_markup=reply_markup)
-        else:
-            await update.edit_message_text(text=response, parse_mode='HTML', reply_markup=reply_markup)
-
-async def handle_package_click(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает клик по пакету"""
-    query = update.callback_query
-    await query.answer()
-    
-    # Извлекаем данные из callback_data
-    callback_data = query.data
-    
-    if callback_data.startswith("package_"):
-        # Формат: package_L_H_W
-        parts = callback_data.split("_")
-        if len(parts) == 4:
-            length = int(parts[1])
-            height = int(parts[2])
-            width = int(parts[3])
-            
-            # Находим описание пакета в базе данных
-            description = ""
-            for pkg_length, pkg_height, pkg_width, desc, _ in PACKAGES:
-                if pkg_length == length and pkg_height == height and pkg_width == width:
-                    description = desc
-                    break
-            
-            # Получаем детали пакета и ссылку
-            details, drawing_url = get_package_details(length, height, width, description)
-            
-            # Создаем клавиатуру с кнопками "Назад" и "Скопировать ссылку" (если есть ссылка)
+        if matching_packages:
+            # Создаем inline клавиатуру для каждого пакета
             keyboard = []
             
-            # Кнопка "Назад" - возвращаемся к текущему результату поиска
-            current_sizes = context.user_data.get('current_sizes', (0, 0, 0))
-            current_type = context.user_data.get('current_type', 'горизонтальный')
+            for i, (l, h, w, d) in enumerate(matching_packages, 1):
+                response += f"😊 {i}. {l} × {h} × {w} мм\n   {d}\n\n"
+                # Создаем callback_data в формате: package_L_H_W
+                callback_data = f"package_{l}_{h}_{w}"
+                keyboard.append([InlineKeyboardButton(f"📦 Пакет {i}: {l}×{h}×{w} мм", callback_data=callback_data)])
             
-            if current_type == "вертикальный":
-                back_text = "⬅️ Назад к вертикальным"
+            # Определяем альтернативный тип для кнопки
+            alt_length, alt_height = height, length  # Меняем местами длину и высоту
+            
+            if search_type == "горизонтальный":
+                alt_type_display = "вертикальные"
+                alt_type = "вертикальный"
             else:
-                back_text = "⬅️ Назад к горизонтальным"
-                
-            # Сохраняем данные для возврата
-            context.user_data['last_search_sizes'] = current_sizes
-            context.user_data['last_search_type'] = current_type
+                alt_type_display = "горизонтальные"
+                alt_type = "горизонтальный"
             
-            keyboard.append([InlineKeyboardButton(back_text, callback_data="back_to_last_search")])
-            
-            # Кнопка "Скопировать ссылку" если есть ссылка
-            if drawing_url:
-                keyboard.append([InlineKeyboardButton("📋 Скопировать ссылку", url=drawing_url)])
+            # Добавляем кнопку для альтернативного поиска
+            alt_callback = f"alternative_{alt_length}_{alt_height}_{width}_{alt_type}"
+            keyboard.append([InlineKeyboardButton(f"🔍 Показать {alt_type_display}", callback_data=alt_callback)])
             
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await query.edit_message_text(
-                text=details,
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
+            if hasattr(update, 'message'):
+                await update.message.reply_html(response, reply_markup=reply_markup)
+            else:
+                await update.edit_message_text(text=response, parse_mode='HTML', reply_markup=reply_markup)
+        else:
+            response += "❌ Пакеты не найдены\n\n"
+            
+            # Определяем альтернативный тип для кнопки
+            alt_length, alt_height = height, length
+            
+            if search_type == "горизонтальный":
+                alt_type_display = "вертикальные"
+                alt_type = "вертикальный"
+            else:
+                alt_type_display = "горизонтальные"
+                alt_type = "горизонтальный"
+            
+            keyboard = [[InlineKeyboardButton(f"🔍 Показать {alt_type_display}", callback_data=f"alternative_{alt_length}_{alt_height}_{width}_{alt_type}")]]
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            if hasattr(update, 'message'):
+                await update.message.reply_html(response, reply_markup=reply_markup)
+            else:
+                await update.edit_message_text(text=response, parse_mode='HTML', reply_markup=reply_markup)
+                
+    except Exception as e:
+        logger.error(f"Error in show_search_results: {e}")
+        error_msg = "❌ Произошла ошибка при поиске пакетов. Попробуйте еще раз."
+        if hasattr(update, 'message'):
+            await update.message.reply_html(error_msg)
+        else:
+            await update.edit_message_text(text=error_msg, parse_mode='HTML')
+
+async def handle_package_click(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает клик по пакету"""
+    try:
+        query = update.callback_query
+        await query.answer()
+        
+        # Извлекаем данные из callback_data
+        callback_data = query.data
+        
+        if callback_data.startswith("package_"):
+            # Формат: package_L_H_W
+            parts = callback_data.split("_")
+            if len(parts) == 4:
+                length = int(parts[1])
+                height = int(parts[2])
+                width = int(parts[3])
+                
+                # Находим описание пакета в базе данных
+                description = ""
+                for pkg_length, pkg_height, pkg_width, desc, _ in PACKAGES:
+                    if pkg_length == length and pkg_height == height and pkg_width == width:
+                        description = desc
+                        break
+                
+                # Получаем детали пакета и ссылку
+                details, drawing_url = get_package_details(length, height, width, description)
+                
+                # Создаем клавиатуру с кнопками "Назад" и "Скопировать ссылку" (если есть ссылка)
+                keyboard = []
+                
+                # Кнопка "Назад" - возвращаемся к текущему результату поиска
+                current_sizes = context.user_data.get('current_sizes', (0, 0, 0))
+                current_type = context.user_data.get('current_type', 'горизонтальный')
+                
+                if current_type == "вертикальный":
+                    back_text = "⬅️ Назад к вертикальным"
+                else:
+                    back_text = "⬅️ Назад к горизонтальным"
+                    
+                # Сохраняем данные для возврата
+                context.user_data['last_search_sizes'] = current_sizes
+                context.user_data['last_search_type'] = current_type
+                
+                keyboard.append([InlineKeyboardButton(back_text, callback_data="back_to_last_search")])
+                
+                # Кнопка "Скопировать ссылку" если есть ссылка
+                if drawing_url:
+                    keyboard.append([InlineKeyboardButton("📋 Скопировать ссылку", url=drawing_url)])
+                
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.edit_message_text(
+                    text=details,
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+    except Exception as e:
+        logger.error(f"Error in handle_package_click: {e}")
 
 async def handle_alternative_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает запрос на альтернативный поиск"""
-    query = update.callback_query
-    await query.answer()
-    
-    # Формат: alternative_L_H_W_type
-    parts = query.data.split("_")
-    if len(parts) == 5:
-        length = int(parts[1])
-        height = int(parts[2])
-        width = int(parts[3])
-        search_type = parts[4]  # "вертикальный" или "горизонтальный"
+    try:
+        query = update.callback_query
+        await query.answer()
         
-        # Показываем результаты альтернативного поиска
-        await show_search_results(query, context, length, height, width, search_type, is_alternative=True)
+        # Формат: alternative_L_H_W_type
+        parts = query.data.split("_")
+        if len(parts) == 5:
+            length = int(parts[1])
+            height = int(parts[2])
+            width = int(parts[3])
+            search_type = parts[4]  # "вертикальный" или "горизонтальный"
+            
+            # Показываем результаты альтернативного поиска
+            await show_search_results(query, context, length, height, width, search_type, is_alternative=True)
+    except Exception as e:
+        logger.error(f"Error in handle_alternative_search: {e}")
 
 async def handle_back_to_last_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает возврат к последнему результату поиска из деталей пакета"""
-    query = update.callback_query
-    await query.answer()
-    
-    # Получаем сохраненные данные о последнем поиска
-    last_sizes = context.user_data.get('last_search_sizes')
-    last_type = context.user_data.get('last_search_type')
-    
-    if last_sizes and last_type:
-        length, height, width = last_sizes
-        # Определяем, был ли это альтернативный поиск
-        is_alternative = (last_sizes != context.user_data.get('original_sizes', last_sizes))
+    try:
+        query = update.callback_query
+        await query.answer()
         
-        # Показываем результаты поиска
-        await show_search_results(query, context, length, height, width, last_type, is_alternative=is_alternative)
-    else:
-        # Если данных нет, возвращаем к началу
-        await query.edit_message_text(
-            text="❌ Не удалось вернуться к результатам поиска. Введите новые размеры.",
-            parse_mode='HTML'
-        )
+        # Получаем сохраненные данные о последнем поиска
+        last_sizes = context.user_data.get('last_search_sizes')
+        last_type = context.user_data.get('last_search_type')
+        
+        if last_sizes and last_type:
+            length, height, width = last_sizes
+            # Определяем, был ли это альтернативный поиск
+            is_alternative = (last_sizes != context.user_data.get('original_sizes', last_sizes))
+            
+            # Показываем результаты поиска
+            await show_search_results(query, context, length, height, width, last_type, is_alternative=is_alternative)
+        else:
+            # Если данных нет, возвращаем к началу
+            await query.edit_message_text(
+                text="❌ Не удалось вернуться к результатам поиска. Введите новые размеры.",
+                parse_mode='HTML'
+            )
+    except Exception as e:
+        logger.error(f"Error in handle_back_to_last_search: {e}")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_html("""
@@ -496,6 +523,7 @@ def run_bot():
         
         # Запускаем Flask приложение
         port = int(os.environ.get('PORT', 8080))
+        logger.info(f"🚀 Запуск бота на порту {port}")
         app.run(host='0.0.0.0', port=port, debug=False)
         
     except Exception as e:
