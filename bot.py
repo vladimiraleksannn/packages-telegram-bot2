@@ -25,9 +25,8 @@ app = Flask(__name__)
 # Создаем приложение Telegram
 application = Application.builder().token(BOT_TOKEN).build()
 
-# База данных пакетов
+# База данных пакетов (пример)
 PACKAGES = [
-    # Пример с одним пакетом
     (250, 350, 90, "Пакет верт. д250 ш90 в350 / с ручками / Штамп 1158", "https://disk.360.yandex.ru/d/Peyk8BPpIlnZhA"),
     # Добавьте остальные пакеты по аналогии...
 ]
@@ -205,18 +204,10 @@ application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_t
 async def webhook():
     """Async endpoint для webhook запросов от Telegram"""
     try:
-        # Получаем JSON данные из запроса
         json_data = request.get_json()
-        logger.info(f"Received webhook: {json_data}")
-        
-        # Создаем Update объект из полученных данных
         update = Update.de_json(json_data, application.bot)
-        
-        # Обрабатываем обновление через приложение
         await application.process_update(update)
-        
         return jsonify({"status": "ok"})
-        
     except Exception as e:
         logger.error(f"Error in webhook: {e}")
         return jsonify({"status": "error"}), 500
@@ -232,7 +223,6 @@ def home():
 # Запуск бота
 async def main():
     """Основная асинхронная функция"""
-    # Инициализируем приложение
     await application.initialize()
     await application.start()
     
@@ -253,10 +243,9 @@ async def main():
     logger.info("🤖 Бот запущен и готов к работе!")
     
     # Запускаем Flask
-    port = int(os.environ.get('PORT', 10000))
+    port = 5000  # Порт 5000 вместо $PORT
     logger.info(f"🚀 Запуск сервера на порту {port}")
     
-    # Не используем app.run() в production, Render сам запустит gunicorn
     if __name__ == "__main__":
         app.run(host='0.0.0.0', port=port, debug=False)
 
