@@ -7,7 +7,6 @@ import time
 import asyncio
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
-from telegram.error import Conflict
 
 # Настройка логирования
 logging.basicConfig(
@@ -441,84 +440,7 @@ async def webhook_handler(request):
     """Обработчик webhook запросов от Telegram"""
     try:
         application = await setup_application()
-        await application.initialize()
         
         # Обрабатываем обновление
-        update = Update.de_json(data=await request.json(), bot=application.bot)
-        await application.process_update(update)
-        
-        return {"status": "ok"}
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        return {"status": "error", "message": str(e)}, 500
-
-def main():
-    """Основная функция с webhook для Render"""
-    try:
-        # Получаем URL для webhook из переменных окружения Render
-        render_external_url = os.getenv('RENDER_EXTERNAL_URL')
-        
-        if render_external_url:
-            logger.info("🚀 Запуск в режиме Webhook на Render")
-            
-            # Настраиваем webhook при запуске
-            async def setup_webhook():
-                app = await setup_application()
-                webhook_url = f"{render_external_url}/webhook"
-                
-                # Удаляем старый webhook и устанавливаем новый
-                await app.bot.delete_webhook()
-                await app.bot.set_webhook(
-                    url=webhook_url,
-                    allowed_updates=["message", "callback_query"],
-                    drop_pending_updates=True
-                )
-                logger.info(f"✅ Webhook установлен: {webhook_url}")
-            
-            # Запускаем настройку webhook
-            asyncio.run(setup_webhook())
-            
-            # Импортируем и запускаем Flask сервер
-            from keep_alive import app
-            import threading
-            
-            def run_flask():
-                app.run(host='0.0.0.0', port=8080, debug=False)
-            
-            # Запускаем Flask в отдельном потоке
-            flask_thread = threading.Thread(target=run_flask, daemon=True)
-            flask_thread.start()
-            logger.info("🌐 Flask сервер запущен на порту 8080")
-            
-            # Бесконечный цикл для поддержания работы
-            while True:
-                time.sleep(3600)  # Спим 1 час
-            
-        else:
-            logger.info("🔍 Запуск в режиме Polling (для локальной разработки)")
-            
-            # Режим polling для локальной разработки
-            async def run_polling():
-                app = await setup_application()
-                await app.initialize()
-                await app.start()
-                await app.updater.start_polling(
-                    allowed_updates=["message", "callback_query"],
-                    drop_pending_updates=True
-                )
-                logger.info("🤖 Бот запущен в режиме polling")
-                
-                # Бесконечный цикл
-                while True:
-                    await asyncio.sleep(3600)
-                    
-            asyncio.run(run_polling())
-            
-    except Exception as e:
-        logger.error(f"❌ Критическая ошибка при запуске: {e}")
-        logger.info("🔄 Перезапуск через 10 секунд...")
-        time.sleep(10)
-        main()
-
-if __name__ == "__main__":
-    main()
+        update = Update.de_json(data=await request.get_json(), bot=application.bot)
+        await
