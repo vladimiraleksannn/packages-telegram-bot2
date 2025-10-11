@@ -1,9 +1,10 @@
 import os
 import logging
 import re
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
-from flask import Flask, request, jsonify
+from flask import Flask
 
 # Настройка логирования
 logging.basicConfig(
@@ -393,63 +394,38 @@ application.add_handler(CallbackQueryHandler(handle_alternative_search, pattern=
 application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-@app.route('/webhook', methods=['POST'])
-async def webhook():
-    """Async endpoint для webhook запросов от Telegram"""
-    try:
-        # Получаем JSON данные из запроса
-        json_data = request.get_json()
-        logger.info(f"Received webhook: {json_data}")
-        
-        if json_data is None:
-            logger.error("Empty webhook received")
-            return jsonify({"status": "error", "message": "Empty data"}), 400
-        
-        # Создаем Update объект из полученных данных
-        update = Update.de_json(json_data, application.bot)
-        
-        # Обрабатываем обновление через приложение
-        await application.process_update(update)
-        
-        return jsonify({"status": "ok"})
-        
-    except Exception as e:
-        logger.error(f"Error in webhook: {e}")
-        return jsonify({"status": "error"}), 500
-
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({"status": "healthy"})
+    return {"status": "healthy", "bot": "running"}
 
 @app.route('/')
 def home():
-    return "Telegram Bot is running!"
+    return "Telegram Package Bot is running!"
 
-async def main():
-    """Основная асинхронная функция"""
-    # Инициализируем приложение
+async def run_bot():
+    """Запуск бота в режиме polling"""
     await application.initialize()
     await application.start()
+    await application.updater.start_polling()
     
-    # Настраиваем webhook только один раз при запуске
-    render_external_url = os.getenv('RENDER_EXTERNAL_URL')
-    if render_external_url:
-        webhook_url = f"{render_external_url}/webhook"
-        await application.bot.set_webhook(
-            url=webhook_url,
-            allowed_updates=["message", "callback_query"],
-            drop_pending_updates=True
-        )
-        logger.info(f"✅ Webhook установлен: {webhook_url}")
-    else:
-        logger.warning("❌ RENDER_EXTERNAL_URL не установлен")
+    logger.info("🤖 Бот запущен в режиме polling!")
     
-    logger.info("🤖 Бот запущен и готов к работе!")
-    
-    # Запускаем Flask с gunicorn (Render сам запустит gunicorn)
-    # Не используем app.run() в production
+    # Бесконечный цикл чтобы бот не завершался
+    while True:
+        await asyncio.sleep(3600)
+
+def run_flask():
+    """Запуск Flask приложения"""
+    port = int(os.getenv('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, debug=False)
+
+async def main():
+    """Основная функция"""
+    # Запускаем бота и Flask параллельно
+    await asyncio.gather(
+        run_bot(),
+        asyncio.to_thread(run_flask)
+    )
 
 if __name__ == "__main__":
-    import asyncio
-    # Запускаем основную функцию
     asyncio.run(main())
