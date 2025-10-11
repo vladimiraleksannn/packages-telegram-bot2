@@ -5,6 +5,7 @@ import signal
 import sys
 import time
 import asyncio
+import threading
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 
@@ -436,14 +437,20 @@ async def setup_application():
     
     return application
 
-async def webhook_handler(request):
-    """Обработчик webhook запросов от Telegram"""
+def webhook_handler(json_data):
+    """Синхронный обработчик webhook запросов от Telegram"""
     try:
-        application = await setup_application()
+        # Создаем новое событийное loop для асинхронной обработки
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         
-        # Обрабатываем обновление
-        update = Update.de_json(data=await request.get_json(), bot=application.bot)
-        await application.process_update(update)
+        async def process_update():
+            app = await setup_application()
+            update = Update.de_json(data=json_data, bot=app.bot)
+            await app.process_update(update)
+        
+        loop.run_until_complete(process_update())
+        loop.close()
         
         return {"status": "ok"}
     except Exception as e:
