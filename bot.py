@@ -1,13 +1,11 @@
 import os
 import logging
 import re
-import signal
-import sys
 import time
 import asyncio
-import threading
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from flask import Flask, request, jsonify
 
 # Настройка логирования
 logging.basicConfig(
@@ -23,8 +21,8 @@ if not BOT_TOKEN:
     logger.error("❌ BOT_TOKEN не установлен!")
     exit(1)
 
-# Состояния для ConversationHandler
-WAITING_ALTERNATIVE = 1
+# Создаем Flask приложение для webhook
+app = Flask(__name__)
 
 # База данных пакетов с ссылками на чертежи
 PACKAGES = [
@@ -196,7 +194,7 @@ async def handle_size(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 "❌ Введите три числа: <b>длина высота ширина</b>\n"
                 "Например: <code>200 250 100</code>"
             )
-            return ConversationHandler.END
+            return
 
         length, height, width = map(int, numbers[:3])
         requested_type = get_requested_type(length, height, width)
@@ -208,15 +206,11 @@ async def handle_size(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         # Вызываем функцию для отображения результатов
         await show_search_results(update, context, length, height, width, requested_type)
         
-        return ConversationHandler.END
-
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Error in handle_size: {e}")
         await update.message.reply_html(
-            "❌ Ошибка. Введите размеры в формате: <code>длина высота ширина</code>",
-            reply_markup=ReplyKeyboardRemove()
+            "❌ Ошибка. Введите размеры в формате: <code>длина высота ширина</code>"
         )
-        return ConversationHandler.END
 
 async def show_search_results(update, context, length, height, width, search_type, is_alternative=False):
     """Показывает результаты поиска с кнопками"""
@@ -386,14 +380,6 @@ async def handle_back_to_last_search(update: Update, context: ContextTypes.DEFAU
             parse_mode='HTML'
         )
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отменяет диалог"""
-    await update.message.reply_html(
-        "✅ Диалог завершен. Введите новые размеры для поиска пакетов.",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return ConversationHandler.END
-
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_html("""
 📋 <b>Как пользоваться ботом:</b>
@@ -412,37 +398,41 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 Бот автоматически определит тип пакета и предложит альтернативные варианты!
     """)
 
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает все текстовые сообщения"""
+    # Если сообщение не команда, обрабатываем как размеры
+    await handle_size(update, context)
+
 # Глобальная переменная для приложения
-application = None
+telegram_app = None
 
 async def setup_application():
     """Настраивает и возвращает приложение"""
-    global application
-    if application is None:
-        application = Application.builder().token(BOT_TOKEN).build()
+    global telegram_app
+    if telegram_app is None:
+        telegram_app = Application.builder().token(BOT_TOKEN).build()
         
-        # Создаем ConversationHandler для обработки диалога
-        conv_handler = ConversationHandler(
-            entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_size)],
-            states={},
-            fallbacks=[CommandHandler("cancel", cancel)]
-        )
+        # Регистрируем обработчики
+        telegram_app.add_handler(CommandHandler("start", start))
+        telegram_app.add_handler(CommandHandler("help", help_command))
+        telegram_app.add_handler(CallbackQueryHandler(handle_package_click, pattern="^package_"))
+        telegram_app.add_handler(CallbackQueryHandler(handle_alternative_search, pattern="^alternative_"))
+        telegram_app.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
         
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CallbackQueryHandler(handle_package_click, pattern="^package_"))
-        application.add_handler(CallbackQueryHandler(handle_alternative_search, pattern="^alternative_"))
-        application.add_handler(CallbackQueryHandler(handle_back_to_last_search, pattern="^back_to_last_search$"))
-        application.add_handler(conv_handler)
+        # Обработчик для всех текстовых сообщений (кроме команд)
+        telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
         
         # Инициализируем приложение
-        await application.initialize()
+        await telegram_app.initialize()
     
-    return application
+    return telegram_app
 
-def webhook_handler(json_data):
-    """Синхронный обработчик webhook запросов от Telegram"""
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Обработчик webhook запросов от Telegram"""
     try:
+        json_data = request.get_json()
+        
         # Создаем новое событийное loop для асинхронной обработки
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -455,77 +445,64 @@ def webhook_handler(json_data):
         loop.run_until_complete(process_update())
         loop.close()
         
-        return {"status": "ok"}
+        return jsonify({"status": "ok"})
     except Exception as e:
         logger.error(f"Webhook error: {e}")
-        return {"status": "error", "message": str(e)}, 500
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-def main():
-    """Основная функция с webhook для Render"""
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint для Render"""
+    return jsonify({"status": "healthy", "service": "telegram-bot"})
+
+@app.route('/')
+def home():
+    """Корневой endpoint"""
+    return jsonify({"status": "running", "service": "telegram-bot"})
+
+async def setup_webhook():
+    """Настраивает webhook при запуске"""
     try:
+        app_instance = await setup_application()
+        
         # Получаем URL для webhook из переменных окружения Render
         render_external_url = os.getenv('RENDER_EXTERNAL_URL')
         
         if render_external_url:
-            logger.info("🚀 Запуск в режиме Webhook на Render")
+            webhook_url = f"{render_external_url}/webhook"
             
-            # Настраиваем webhook при запуске
-            async def setup_webhook():
-                app = await setup_application()
-                webhook_url = f"{render_external_url}/webhook"
-                
-                # Удаляем старый webhook и устанавливаем новый
-                await app.bot.delete_webhook()
-                await app.bot.set_webhook(
-                    url=webhook_url,
-                    allowed_updates=["message", "callback_query"],
-                    drop_pending_updates=True
-                )
-                logger.info(f"✅ Webhook установлен: {webhook_url}")
-            
-            # Запускаем настройку webhook
-            asyncio.run(setup_webhook())
-            
-            # Импортируем и запускаем Flask сервер
-            from keep_alive import app
-            import threading
-            
-            def run_flask():
-                app.run(host='0.0.0.0', port=8080, debug=False)
-            
-            # Запускаем Flask в отдельном потоке
-            flask_thread = threading.Thread(target=run_flask, daemon=True)
-            flask_thread.start()
-            logger.info("🌐 Flask сервер запущен на порту 8080")
-            
-            # Бесконечный цикл для поддержания работы
-            while True:
-                time.sleep(3600)  # Спим 1 час
-            
+            # Удаляем старый webhook и устанавливаем новый
+            await app_instance.bot.delete_webhook()
+            await app_instance.bot.set_webhook(
+                url=webhook_url,
+                allowed_updates=["message", "callback_query"],
+                drop_pending_updates=True
+            )
+            logger.info(f"✅ Webhook установлен: {webhook_url}")
         else:
-            logger.info("🔍 Запуск в режиме Polling (для локальной разработки)")
+            logger.warning("⚠️ RENDER_EXTERNAL_URL не установлен, webhook не настроен")
             
-            # Режим polling для локальной разработки
-            async def run_polling():
-                app = await setup_application()
-                await app.start()
-                await app.updater.start_polling(
-                    allowed_updates=["message", "callback_query"],
-                    drop_pending_updates=True
-                )
-                logger.info("🤖 Бот запущен в режиме polling")
-                
-                # Бесконечный цикл
-                while True:
-                    await asyncio.sleep(3600)
-                    
-            asyncio.run(run_polling())
-            
+    except Exception as e:
+        logger.error(f"❌ Ошибка настройки webhook: {e}")
+
+def run_bot():
+    """Запускает бота"""
+    try:
+        # Запускаем настройку webhook
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(setup_webhook())
+        loop.close()
+        
+        # Запускаем Flask приложение
+        port = int(os.environ.get('PORT', 8080))
+        app.run(host='0.0.0.0', port=port, debug=False)
+        
     except Exception as e:
         logger.error(f"❌ Критическая ошибка при запуске: {e}")
         logger.info("🔄 Перезапуск через 10 секунд...")
         time.sleep(10)
-        main()
+        run_bot()
 
 if __name__ == "__main__":
-    main()
+    run_bot()
