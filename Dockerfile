@@ -7,5 +7,5 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-# Используем фиксированный порт 5000 для Flask, чтобы избежать ошибок с переменной $PORT
+# Исправляем опцию bind (было -bind, должно быть --bind)
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
